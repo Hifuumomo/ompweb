@@ -31,3 +31,10 @@ test("composer toolbar and shell controls do not force 44px coarse pointer overr
     "coarse pointer media query must not force 44px min-height onto compact toolbar buttons",
   );
 });
+
+test("touch targets density options define accessible and compact modes with inline source tag", async () => {
+  const source = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(source, /@source\s+inline\("data-touch-targets"\);/);
+  assert.match(source, /html\[data-touch-targets="accessible"\]\s+\.composer-primary-action\s*\{[^}]*min-height:\s*44px/);
+  assert.match(source, /html\[data-touch-targets="compact"\]\s+\.composer-primary-action\s*\{[^}]*min-height:\s*28px/);
+});

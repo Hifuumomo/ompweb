@@ -4,6 +4,7 @@
 @import "tailwindcss" source(none);
 @source inline("data-font-size");
 @source inline("data-ui-scale");
+@source inline("data-touch-targets");
 @source "../app";
 @source "../components";
 @source "../hooks";
@@ -4242,6 +4243,45 @@ html.dark .dropdown-surface :is(select, option) {
   transition: transform var(--dur-fast) var(--ease-out-warm);
 }
 .skip-link:focus { transform: translateY(0); }
+
+/* Touch target density options (Settings -> Touch Targets). */
+html[data-touch-targets="accessible"] .shell-toolbar-btn,
+html[data-touch-targets="accessible"] .right-panel-toolbar [role="toolbar"] > button {
+  min-width: 44px;
+  min-height: 44px;
+}
+html[data-touch-targets="accessible"] .composer-primary-action {
+  min-height: 44px;
+  min-width: 44px;
+}
+html[data-touch-targets="accessible"] .composer-toolbar {
+  flex-wrap: wrap !important;
+  gap: 4px;
+}
+html[data-touch-targets="accessible"] .composer-toolbar > button,
+html[data-touch-targets="accessible"] .composer-toolbar > div > button {
+  min-height: 44px;
+}
+
+html[data-touch-targets="compact"] .shell-toolbar-btn {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+}
+html[data-touch-targets="compact"] .composer-primary-action {
+  min-height: 28px !important;
+}
+html[data-touch-targets="compact"] .composer-toolbar > button,
+html[data-touch-targets="compact"] .composer-toolbar > div > button {
+  min-height: 28px !important;
+}
+
+@media (max-width: 640px) and (pointer: coarse) and (hover: none) {
+  html:not([data-touch-targets="compact"]):not([data-touch-targets="accessible"]) .composer-primary-action {
+    min-height: 40px;
+  }
+}
 
 /* Pagination restores history without replaying entrance motion. */
 .chat-message-card { animation: none; }
