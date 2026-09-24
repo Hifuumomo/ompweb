@@ -22,3 +22,12 @@ test("ui scale zoom rules shrink the html box so the painted result fits the vie
     /html\[data-ui-scale="compact"\],\s*html\[data-ui-scale="comfortable"\],\s*html\[data-ui-scale="large"\]\s*\{[^}]*height:\s*calc\(100%\s*\/\s*var\(--ui-scale\)\)/,
   );
 });
+
+test("composer toolbar and shell controls do not force 44px coarse pointer overrides", async () => {
+  const source = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.doesNotMatch(
+    source,
+    /@media\s*\(pointer:\s*coarse\)\s*\{[^}]*(?:composer-toolbar|composer-primary-action|shell-toolbar-btn)[^}]*min-height:\s*44px/s,
+    "coarse pointer media query must not force 44px min-height onto compact toolbar buttons",
+  );
+});
