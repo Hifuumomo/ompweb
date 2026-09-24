@@ -37,4 +37,6 @@ test("touch targets density options define accessible and compact modes with inl
   assert.match(source, /@source\s+inline\("data-touch-targets"\);/);
   assert.match(source, /html\[data-touch-targets="accessible"\]\s+\.composer-primary-action\s*\{[^}]*min-height:\s*44px/);
   assert.match(source, /html\[data-touch-targets="compact"\]\s+\.composer-primary-action\s*\{[^}]*min-height:\s*28px/);
+  assert.match(source, /html\[data-touch-targets="compact"\]\s+\.session-item-row\s*\{[^}]*min-height:\s*30px/);
+  assert.match(source, /html\[data-touch-targets="compact"\]\s+\.settings-card\s*\{[^}]*padding:\s*10px 16px/);
 });

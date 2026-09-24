@@ -4276,6 +4276,28 @@ html[data-touch-targets="compact"] .composer-toolbar > button,
 html[data-touch-targets="compact"] .composer-toolbar > div > button {
   min-height: 28px !important;
 }
+html[data-touch-targets="compact"] .session-item-row {
+  min-height: 30px !important;
+}
+html[data-touch-targets="compact"] .session-item-trailing {
+  height: 24px !important;
+  width: 68px !important;
+}
+html[data-touch-targets="compact"] .session-item-menu-button {
+  width: 24px !important;
+  height: 24px !important;
+}
+html[data-touch-targets="compact"] .session-item-row .session-item-button {
+  padding-right: 70px !important;
+}
+html[data-touch-targets="compact"] .settings-card {
+  padding: 10px 16px !important;
+  margin-bottom: 6px !important;
+  gap: 12px !important;
+}
+html[data-touch-targets="compact"] .message-copy-action {
+  min-height: 28px !important;
+}
 
 @media (max-width: 640px) and (pointer: coarse) and (hover: none) {
   html:not([data-touch-targets="compact"]):not([data-touch-targets="accessible"]) .composer-primary-action {
