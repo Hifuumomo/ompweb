@@ -71,6 +71,7 @@ const nativeSelectStyle = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+  fontFamily: "inherit",
   cursor: "pointer",
   appearance: "none" as const,
   WebkitAppearance: "none" as const,
@@ -85,6 +86,8 @@ const nativeSelectStyle = {
 const nativeOptionStyle = {
   background: "var(--bg-panel)",
   color: "var(--text)",
+  fontFamily: "inherit",
+  fontSize: 12,
 } as const;
 
 const chipStyle = {
