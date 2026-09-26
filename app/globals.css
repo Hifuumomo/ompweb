@@ -4263,6 +4263,101 @@ html[data-touch-targets="accessible"] .composer-toolbar > div > button {
   min-height: 44px;
 }
 
+/* Upstream coarse-pointer 44px targets, applied only in the Accessible mode. */
+html[data-touch-targets="accessible"] :is(
+  .composer-toolbar > button,
+  .composer-toolbar > div > button,
+  .composer-primary-action,
+  .shell-toolbar-btn,
+  .sidebar-icon-button,
+  .sidebar-project-action,
+  .sidebar-project-toggle,
+  .right-panel-toolbar [role="toolbar"] > button,
+  .git-clear-filter,
+  .git-refresh,
+  .git-change-open-action,
+  .git-change-mention-action,
+  .git-change-footer-open,
+  .file-explorer-search-input,
+  .file-explorer-search-clear,
+  .sidebar-session-search,
+  .attachment-remove-button,
+  .archive-search-input,
+  .archive-search-clear
+) {
+    min-height: 44px !important;
+}
+html[data-touch-targets="accessible"] :is(
+  .attachment-remove-button,
+  .file-explorer-search-clear,
+  .archive-search-clear
+) {
+    min-width: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .load-retry-button
+) {
+    min-width: 44px;
+    min-height: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .toast-close-button
+) {
+    min-width: 44px;
+    min-height: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .sidebar-new-session,
+  .process-details-toggle,
+  .activity-row-trigger,
+  .session-item-icon-button,
+  .tool-call-input-toggle
+) {
+    min-height: 44px !important;
+}
+html[data-touch-targets="accessible"] :is(
+  .git-change-row
+) {
+    min-height: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .dialog-action
+) {
+    min-height: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .settings-back,
+  .settings-close-btn,
+  .settings-header input,
+  .settings-nav-item,
+  .providers-segmented-btn,
+  .agent-config-action,
+  .agent-config-search,
+  .agent-config-row
+) {
+    min-height: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .mcp-refresh-button,
+  .mcp-server-select,
+  .mcp-add-server,
+  .mcp-config-input,
+  .mcp-action
+) {
+    min-height: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .settings-close-btn,
+  .mcp-refresh-button
+) {
+    min-width: 44px;
+}
+html[data-touch-targets="accessible"] :is(
+  .settings-close-btn
+) {
+    min-width: 44px;
+}
+
 html[data-touch-targets="compact"] .shell-toolbar-btn {
   width: 28px !important;
   height: 28px !important;
