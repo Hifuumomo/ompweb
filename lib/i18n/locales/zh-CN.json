@@ -1189,7 +1189,7 @@
   "settingsConfig.personalityFriendly": "友好",
   "settingsConfig.personalityPragmatic": "实用",
   "settingsConfig.personalityNone": "无",
-  "settingsConfig.thinkingBlocks": "思考块",
+  "settingsConfig.thinkingBlocks": "隐藏思考块",
   "settingsConfig.thinkingBlocksDesc": "在输出视图中隐藏模型的思考过程。",
   "settingsConfig.externalThinking": "外部思考草稿",
   "settingsConfig.externalThinkingDesc": "通过 think 工具进行私有草稿区思考。",

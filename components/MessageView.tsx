@@ -205,6 +205,8 @@ interface Props {
   prevTimestamp?: number;
   sessionId?: string;
   toolCallsDefaultCollapsed?: boolean;
+  /** omp `hideThinkingBlock`: omit thinking blocks. */
+  hideThinking?: boolean;
   /** omp-reported output throughput (get_state.tokensPerSecond), live while streaming. */
   liveTokensPerSecond?: number | null;
 }
@@ -236,12 +238,12 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, forkEntryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, liveTokensPerSecond }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, forkEntryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, hideThinking = false, liveTokensPerSecond }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} forkEntryId={forkEntryId} onFork={onFork} forking={forking} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} liveTokensPerSecond={liveTokensPerSecond} />;
+    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} forkEntryId={forkEntryId} onFork={onFork} forking={forking} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} hideThinking={hideThinking} liveTokensPerSecond={liveTokensPerSecond} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -282,6 +284,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.prevTimestamp === next.prevTimestamp
     && prev.sessionId === next.sessionId
     && prev.toolCallsDefaultCollapsed === next.toolCallsDefaultCollapsed
+    && prev.hideThinking === next.hideThinking
     && (!prev.isStreaming || prev.liveTokensPerSecond === next.liveTokensPerSecond);
 });
 
@@ -527,6 +530,7 @@ function AssistantMessageView({
   onFork,
   forking,
   toolCallsDefaultCollapsed,
+  hideThinking,
   liveTokensPerSecond,
 }: {
   message: AssistantMessage;
@@ -544,6 +548,7 @@ function AssistantMessageView({
   onFork?: (entryId: string) => void;
   forking?: boolean;
   toolCallsDefaultCollapsed: boolean;
+  hideThinking: boolean;
   liveTokensPerSecond?: number | null;
 }) {
   const { t, locale } = useI18n();
@@ -562,7 +567,7 @@ function AssistantMessageView({
   const canFork = !!forkEntryId && !!onFork;
   const blockItems = (message.content ?? [])
     .map((block, originalIndex) => ({ block, originalIndex }))
-    .filter(({ block }) => !isEmptyThinkingBlock(block, { isStreaming }));
+    .filter(({ block }) => !(hideThinking && block.type === "thinking") && !isEmptyThinkingBlock(block, { isStreaming }));
   const blocks = blockItems.map(({ block }) => block);
   const hasActivityBlocks = blocks.some((block) => block.type === "thinking" || block.type === "toolCall");
   const errorMessage = message.errorMessage?.trim() || null;
@@ -1340,7 +1345,7 @@ function CompactionFileList({ title, files }: { title: string; files: string[] }
 function stripHiddenWrappers(text: string): string {
   let t = text.trim();
   t = t.replace(/^<!--[\s\S]*?-->\s*/, "").trim();
-  const outer = t.match(/^<([a-zA-Z0-9_-]+)(?:\s[^>]*)?>\s*([\s\S]*?)\s*<\/\1>\s*$/);
+  const outer = t.match(/^<([a-zA-Z0-9_-]+)(?:\s(?:[^>"]|"[^"]*")*)?>\s*([\s\S]*?)\s*<\/\1>\s*$/);
   if (outer) return outer[2].trim();
   return t;
 }
@@ -1558,7 +1563,11 @@ function HiddenExtensionView({ message, cwd, onOpenFile }: { message: CustomMess
 
 function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessage; cwd?: string; onOpenFile?: (filePath: string) => void }) {
   const { t, locale } = useI18n();
-  const [contentExpanded, setContentExpanded] = useState(true);
+  // Reminders and job notices are activity, as in the TUI: start collapsed to
+  // their first line; the header toggles them like a tool call.
+  const isDeveloper = message.customType === "developer";
+  const isNotice = isDeveloper || message.customType === "async-result" || message.customType === "lsp-late-diagnostic";
+  const [contentExpanded, setContentExpanded] = useState(!isNotice);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const { copied, copy: copyContent } = useCopyFeedback();
   const text = getMessageText(message.content);
@@ -1572,8 +1581,14 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
   // block (newlines collapse) and `---` becomes a heading, so strip it and show
   // them verbatim.
   const isPlainText = message.customType === "async-result" || message.customType === "lsp-late-diagnostic";
-  const displayText = ircEnvelope ? ircEnvelope.body : isPlainText ? stripHiddenWrappers(text) : text;
-  const title = isIrc
+  const displayText = ircEnvelope ? ircEnvelope.body : isPlainText || isDeveloper ? stripHiddenWrappers(text) : text;
+  // `<system-reminder reason="…" rule="…">` → "system-reminder · reason=… · rule=…".
+  const wrapper = isDeveloper ? text.trim().match(/^<([\w-]+)((?:\s+[\w-]+="[^"]*")*)\s*>/) : null;
+  const firstLine = displayText.split("\n").find((line) => line.trim())?.trim() ?? "";
+  const collapsedPreview = firstLine && firstLine !== displayText.trim() ? `${firstLine} …` : firstLine;
+  const title = wrapper
+    ? [wrapper[1], ...[...wrapper[2].matchAll(/([\w-]+)="([^"]*)"/g)].map((attr) => `${attr[1]}=${attr[2]}`)].join(" · ")
+    : isIrc
     ? (ircEnvelope?.sender ?? formatCustomType(message.customType))
     : message.customType === "advisor"
       ? t("messageView.advisorLabel")
@@ -1594,6 +1609,11 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
         }}
       >
         <div
+          role={isNotice ? "button" : undefined}
+          tabIndex={isNotice ? 0 : undefined}
+          aria-expanded={isNotice ? contentExpanded : undefined}
+          onClick={isNotice ? () => setContentExpanded((v) => !v) : undefined}
+          onKeyDown={isNotice ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setContentExpanded((v) => !v); } } : undefined}
           style={{
             userSelect: "none",
             display: "flex",
@@ -1604,12 +1624,28 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
             background: "var(--bg-panel)",
             color: "var(--text-muted)",
             fontSize: 12,
+            cursor: isNotice ? "pointer" : undefined,
           }}
         >
-          <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650 }}>
+          {isNotice && (
+            <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true" style={{ flexShrink: 0, transform: contentExpanded ? "none" : "rotate(-90deg)" }} />
+          )}
+          <span
+            style={{
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              fontWeight: 650,
+              minWidth: 0,
+              // Collapsed notices keep the header to one line, like a tool call's arguments.
+              ...(isNotice && !contentExpanded
+                ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }
+                : { overflowWrap: "anywhere" }),
+            }}
+          >
             {isIrc && message.customType === "irc:incoming" ? `← ${title}` : title}
           </span>
-          {time && <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
+          {time && <span style={{ marginLeft: "auto", flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
         </div>
 
         {contentExpanded ? (
@@ -1653,9 +1689,10 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
               cursor: "pointer",
               fontSize: 12,
               textAlign: "left",
+              ...(isNotice ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : {}),
             }}
           >
-            {displayText ? previewText(displayText) : t("messageView.showExtensionMessage")}
+            {isNotice && collapsedPreview ? collapsedPreview : displayText ? previewText(displayText) : t("messageView.showExtensionMessage")}
           </button>
         )}
 

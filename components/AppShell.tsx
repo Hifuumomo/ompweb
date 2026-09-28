@@ -129,6 +129,20 @@ export function AppShell() {
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_DEFAULT_WIDTH);
   const [toolCallsDefaultCollapsed, setToolCallsDefaultCollapsed] = useState(true);
+  const [hideThinkingBlock, setHideThinkingBlock] = useState(false);
+  useEffect(() => {
+    // omp's own setting, so the transcript hides thinking when the TUI does.
+    // Re-read on focus: the TUI or another tab may have changed it.
+    const load = () => {
+      fetch("/api/omp-settings")
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data: { settings?: { hideThinkingBlock?: boolean } } | null) => { if (data) setHideThinkingBlock(data.settings?.hideThinkingBlock === true); })
+        .catch(() => {});
+    };
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
   const [providerUsageVisible, setProviderUsageVisible] = useState(true);
   const [scopeNativeSelectAll, setScopeNativeSelectAll] = useState(false);
   const [openUrlAutomatically, setOpenUrlAutomatically] = useState(false);
@@ -1806,6 +1820,7 @@ export function AppShell() {
             activeTab={settingsTab}
             toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
             onToolCallsDefaultCollapsedChange={handleToolCallsDefaultCollapsedChange}
+            onHideThinkingBlockChange={setHideThinkingBlock}
             providerUsageVisible={providerUsageVisible}
             onProviderUsageVisibleChange={handleProviderUsageVisibleChange}
             scopeNativeSelectAll={scopeNativeSelectAll}
@@ -2250,6 +2265,7 @@ export function AppShell() {
               onGenerationSpeedChange={handleGenerationSpeedChange}
               onOpenProviders={() => setSettingsTab("providers")}
               toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+              hideThinkingBlock={hideThinkingBlock}
             />
           ) : initialCwdStatus === "validating" ? (
             <WorkspaceState

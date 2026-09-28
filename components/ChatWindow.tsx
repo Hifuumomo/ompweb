@@ -5,8 +5,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type
 import { ArrowDown, ChevronDown, ChevronUp, Layers, Paperclip, Square } from "lucide-react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolCallContent, ToolResultMessage } from "@/lib/types";
 import { translate, useI18n } from "@/lib/i18n";
-import { getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
-import { isGroupAnchor, planTranscriptRows, type TranscriptRow } from "@/lib/chat-transcript-plan";
+import { isGroupAnchor, planTranscriptRows, type ActivityPiece, type TranscriptRow } from "@/lib/chat-transcript-plan";
 import { resolveForkEntryIds } from "@/lib/chat-fork";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -42,6 +41,8 @@ interface Props {
   newSessionCwd: string | null;
   newSessionWorkspace?: ReactNode;
   toolCallsDefaultCollapsed?: boolean;
+  /** omp `hideThinkingBlock`: omit thinking from the transcript. */
+  hideThinkingBlock?: boolean;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
   onSessionForked?: (newSessionId: string) => void;
@@ -226,121 +227,49 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-function renderClusteredProcessMessages(
-  messages: AgentMessage[],
-  visibleProcessIndices: number[],
-  finalAssistantIdx: number | null,
-  finalProcessMessage: AssistantMessage | null,
-  renderMessage: (idx: number, options?: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean }) => ReactNode,
-): ReactNode[] {
+type RenderMessage = (idx: number, options?: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean }) => ReactNode;
+
+/** Render a folded activity run; consecutive tool calls cluster into one row. */
+function renderActivityPieces(messages: AgentMessage[], pieces: ActivityPiece[], renderMessage: RenderMessage): ReactNode[] {
   const rendered: ReactNode[] = [];
   let pendingToolCalls: Array<{ block: ToolCallContent; msgIdx: number }> = [];
 
   const flushToolCalls = () => {
     if (pendingToolCalls.length === 0) return;
-    if (pendingToolCalls.length === 1) {
-      const item = pendingToolCalls[0];
-      const origMsg = messages[item.msgIdx] as AssistantMessage;
-      if (origMsg.content?.length === 1) {
-        rendered.push(renderMessage(item.msgIdx, { attachRef: false, keyPrefix: "process" }));
-      } else {
-        rendered.push(
-          renderMessage(item.msgIdx, {
-            attachRef: false,
-            keyPrefix: `process-tool-${item.msgIdx}`,
-            messageOverride: withAssistantBlocks(origMsg, [item.block], { omitUsage: true }),
-            showTimestamp: false,
-          }),
-        );
-      }
-    } else {
-      const first = pendingToolCalls[0];
-      const baseMsg = messages[first.msgIdx] as AssistantMessage;
-      const combinedMsg = withAssistantBlocks(
-        baseMsg,
-        pendingToolCalls.map((c) => c.block),
-        { omitUsage: true },
-      );
-      rendered.push(
-        renderMessage(first.msgIdx, {
-          attachRef: false,
-          keyPrefix: `process-cluster-${first.msgIdx}-${pendingToolCalls.length}`,
-          messageOverride: combinedMsg,
-          showTimestamp: false,
-        }),
-      );
-    }
+    const first = pendingToolCalls[0];
+    rendered.push(
+      renderMessage(first.msgIdx, {
+        attachRef: false,
+        keyPrefix: `activity-tools-${first.msgIdx}-${rendered.length}`,
+        messageOverride: { ...withAssistantBlocks(messages[first.msgIdx] as AssistantMessage, pendingToolCalls.map((c) => c.block), { omitUsage: true }), errorMessage: undefined },
+        showTimestamp: false,
+      }),
+    );
     pendingToolCalls = [];
   };
 
-  for (const idx of visibleProcessIndices) {
-    const msg = messages[idx];
-    if (msg?.role === "assistant") {
-      const blocks = getDisplayableAssistantBlocks(msg as AssistantMessage);
-      for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
-        const block = blocks[bIdx];
-        if (block.type === "thinking") {
-          flushToolCalls();
-          const thinkingMsg = withAssistantBlocks(msg as AssistantMessage, [block], { omitUsage: true });
-          rendered.push(
-            renderMessage(idx, {
-              attachRef: false,
-              keyPrefix: `process-thinking-${idx}-${bIdx}`,
-              messageOverride: thinkingMsg,
-              showTimestamp: false,
-            }),
-          );
-        } else if (block.type === "toolCall") {
-          pendingToolCalls.push({ block: block as ToolCallContent, msgIdx: idx });
-        } else {
-          flushToolCalls();
-          const otherMsg = withAssistantBlocks(msg as AssistantMessage, [block], { omitUsage: true });
-          rendered.push(
-            renderMessage(idx, {
-              attachRef: false,
-              keyPrefix: `process-block-${idx}-${bIdx}`,
-              messageOverride: otherMsg,
-              showTimestamp: false,
-            }),
-          );
-        }
-      }
-    } else {
+  for (const piece of pieces) {
+    if (!piece.blocks) {
       flushToolCalls();
-      rendered.push(renderMessage(idx, { attachRef: false, keyPrefix: "process" }));
+      rendered.push(renderMessage(piece.index, { attachRef: false, keyPrefix: "activity" }));
+      continue;
     }
-  }
-
-  if (finalAssistantIdx !== null && finalProcessMessage) {
-    const blocks = getDisplayableAssistantBlocks(finalProcessMessage);
-    for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
-      const block = blocks[bIdx];
-      if (block.type === "thinking") {
-        flushToolCalls();
-        const thinkingMsg = withAssistantBlocks(finalProcessMessage, [block], { omitUsage: true });
-        rendered.push(
-          renderMessage(finalAssistantIdx, {
-            attachRef: false,
-            keyPrefix: `process-final-thinking-${finalAssistantIdx}-${bIdx}`,
-            messageOverride: thinkingMsg,
-            showTimestamp: false,
-          }),
-        );
-      } else if (block.type === "toolCall") {
-        pendingToolCalls.push({ block: block as ToolCallContent, msgIdx: finalAssistantIdx });
-      } else {
-        flushToolCalls();
-        const otherMsg = withAssistantBlocks(finalProcessMessage, [block], { omitUsage: true });
-        rendered.push(
-          renderMessage(finalAssistantIdx, {
-            attachRef: false,
-            keyPrefix: `process-final-block-${finalAssistantIdx}-${bIdx}`,
-            messageOverride: otherMsg,
-            showTimestamp: false,
-          }),
-        );
+    const msg = messages[piece.index] as AssistantMessage;
+    piece.blocks.forEach((block, bIdx) => {
+      if (block.type === "toolCall") {
+        pendingToolCalls.push({ block: block as ToolCallContent, msgIdx: piece.index });
+        return;
       }
-    }
+      flushToolCalls();
+      rendered.push(
+        renderMessage(piece.index, {
+          attachRef: false,
+          keyPrefix: `activity-block-${piece.index}-${bIdx}`,
+          messageOverride: { ...withAssistantBlocks(msg, [block], { omitUsage: true }), errorMessage: undefined },
+          showTimestamp: false,
+        }),
+      );
+    });
   }
 
   flushToolCalls();
@@ -364,6 +293,7 @@ interface CommittedTranscriptProps {
   onOpenFile?: (filePath: string) => void;
   sessionId: string | undefined;
   toolCallsDefaultCollapsed: boolean;
+  hideThinkingBlock: boolean;
   visibleCount: number;
   /** True while the viewport is near the bottom of the conversation. When
    *  false (user is reading history), the render window anchors its top so
@@ -383,7 +313,7 @@ interface CommittedTranscriptProps {
 const CommittedTranscript = memo(function CommittedTranscript({
   messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, isNew, forkingEntryId,
   handleFork, handleNavigate, handleEditContent, modelNames, messageCwd, onOpenFile, sessionId,
-  toolCallsDefaultCollapsed, visibleCount, nearBottom, sentinelRef, handleLoadMoreClick,
+  toolCallsDefaultCollapsed, hideThinkingBlock, visibleCount, nearBottom, sentinelRef, handleLoadMoreClick,
 }: CommittedTranscriptProps) {
   const { t } = useI18n();
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
@@ -443,6 +373,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
         prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
         sessionId={sessionId}
         toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+        hideThinking={hideThinkingBlock}
       />
     );
     if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;
@@ -457,7 +388,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   // visible window. Invisible history never allocates React elements, so long
   // sessions pay element cost proportional to the visible window instead of
   // the whole transcript.
-  const rows = useMemo<TranscriptRow[]>(() => planTranscriptRows(messages), [messages]);
+  const rows = useMemo<TranscriptRow[]>(() => planTranscriptRows(messages, { hideThinking: hideThinkingBlock }), [messages, hideThinkingBlock]);
   const isLiveTail = (row: TranscriptRow): boolean => {
     if (row.kind !== "group") return false;
     return (sessionBusy || isStreaming) && row.endIndex === messages.length && row.userIndex === lastAnchorIdx;
@@ -489,11 +420,11 @@ const CommittedTranscript = memo(function CommittedTranscript({
       rendered.push(renderMessage(row.index));
       continue;
     }
-    const { userIndex: userIdx, endIndex: endIdx, finalAssistantIndex: finalAssistantIdx, processIndices, processCount, toolCallCount: groupToolCallCount, hasFinalAnswer } = row;
+    const { userIndex: userIdx, endIndex: endIdx, segments } = row;
 
     if (isLiveTail(row)) {
-      // Live tail: the run may still be producing the final answer — flatten
-      // the group so streaming updates render without a collapsed wrapper.
+      // Live tail: render the running turn flat so streaming updates and tool
+      // progress stay in view; it folds once the run ends.
       for (let renderIdx = userIdx; renderIdx < endIdx; renderIdx++) {
         rendered.push(renderMessage(renderIdx));
       }
@@ -501,50 +432,38 @@ const CommittedTranscript = memo(function CommittedTranscript({
     }
 
     rendered.push(renderMessage(userIdx));
-    const processRefIdx = processIndices
-      .map((processIdx) => visibleRefIndexByMessage.get(processIdx))
-      .find((value): value is number => typeof value === "number")
-      ?? (hasFinalAnswer ? undefined : visibleRefIndexByMessage.get(finalAssistantIdx));
-    const finalAssistant = messages[finalAssistantIdx] as AssistantMessage;
-    const finalSplit = splitFinalAssistantBlocks(finalAssistant);
-    const finalProcessMessage = finalSplit.processBlocks.length > 0
-      ? withAssistantBlocks(finalAssistant, finalSplit.processBlocks, { omitUsage: true })
-      : null;
-    const finalAnswerMessage = hasFinalAnswer
-      ? withAssistantBlocks(finalAssistant, finalSplit.answerBlocks)
-      : null;
-
-    if (processCount > 0) {
-      const processGroup = (
-        <ProcessDetailsGroup
-          messageCount={processCount}
-          toolCallCount={groupToolCallCount}
-        >
-          {() => renderClusteredProcessMessages(
-            messages,
-            processIndices,
-            finalProcessMessage ? finalAssistantIdx : null,
-            finalProcessMessage,
-            renderMessage,
-          )}
-        </ProcessDetailsGroup>
-      );
+    // A message split across segments keeps its navigation ref on the first one.
+    const attached = new Set<number>();
+    segments.forEach((segment, segmentIdx) => {
+      if (segment.kind === "text") {
+        const msg = messages[segment.index] as AssistantMessage;
+        const override = withAssistantBlocks(msg, segment.blocks, { omitUsage: !segment.last });
+        if (!segment.last) override.errorMessage = undefined;
+        rendered.push(renderMessage(segment.index, {
+          attachRef: !attached.has(segment.index),
+          keyPrefix: `text-${segmentIdx}`,
+          messageOverride: override,
+          ...(segment.last ? {} : { showTimestamp: false }),
+        }));
+        attached.add(segment.index);
+        return;
+      }
+      const refIdx = segment.pieces
+        .filter((piece) => !attached.has(piece.index))
+        .map((piece) => visibleRefIndexByMessage.get(piece.index))
+        .find((value): value is number => typeof value === "number");
+      for (const piece of segment.pieces) attached.add(piece.index);
       rendered.push(
         <div
-          key={`process-group-${userIdx}-${finalAssistantIdx}`}
-          ref={processRefIdx === undefined ? undefined : (el) => { messageRefs.current[processRefIdx] = el; }}
+          key={`activity-${userIdx}-${segmentIdx}`}
+          ref={refIdx === undefined ? undefined : (el) => { messageRefs.current[refIdx] = el; }}
         >
-          {processGroup}
+          <ProcessDetailsGroup messageCount={segment.stepCount} toolCallCount={segment.toolCallCount}>
+            {() => renderActivityPieces(messages, segment.pieces, renderMessage)}
+          </ProcessDetailsGroup>
         </div>,
       );
-    }
-
-    if (finalAnswerMessage) {
-      rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage }));
-    }
-    for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
-      rendered.push(renderMessage(renderIdx));
-    }
+    });
   }
   return (
     <>
@@ -563,7 +482,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   );
 });
 
-export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
+export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
   const { t, tn } = useI18n();
   const { playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -1345,6 +1264,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               onOpenFile={onOpenFile}
               sessionId={session?.id ?? sessionIdRef.current ?? undefined}
               toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+              hideThinkingBlock={hideThinkingBlock}
               visibleCount={visibleCount}
               nearBottom={nearBottom}
               sentinelRef={sentinelRef}
@@ -1359,6 +1279,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
                 onOpenFile={onOpenFile}
                 toolResults={toolResultsWithLive}
                 toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+                hideThinking={hideThinkingBlock}
                 liveTokensPerSecond={tokensPerSecond}
               />
             )}

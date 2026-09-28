@@ -1218,7 +1218,7 @@
   "settingsConfig.personalityFriendly": "friendly",
   "settingsConfig.personalityPragmatic": "pragmatic",
   "settingsConfig.personalityNone": "none",
-  "settingsConfig.thinkingBlocks": "Thinking Blocks",
+  "settingsConfig.thinkingBlocks": "Hide Thinking Blocks",
   "settingsConfig.thinkingBlocksDesc": "Hide model reasoning from output view.",
   "settingsConfig.externalThinking": "External Thinking",
   "settingsConfig.externalThinkingDesc": "Private scratchpad reasoning via think tool.",
