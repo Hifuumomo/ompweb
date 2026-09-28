@@ -207,6 +207,8 @@ interface Props {
   toolCallsDefaultCollapsed?: boolean;
   /** omp `hideThinkingBlock`: omit thinking blocks. */
   hideThinking?: boolean;
+  /** Source `content` index of each block when `message` carries a subset of an entry's blocks, so deferred thinking loads the right block. */
+  sourceBlockIndices?: number[];
   /** omp-reported output throughput (get_state.tokensPerSecond), live while streaming. */
   liveTokensPerSecond?: number | null;
 }
@@ -238,12 +240,12 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, forkEntryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, hideThinking = false, liveTokensPerSecond }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, forkEntryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, hideThinking = false, sourceBlockIndices, liveTokensPerSecond }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} forkEntryId={forkEntryId} onFork={onFork} forking={forking} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} hideThinking={hideThinking} liveTokensPerSecond={liveTokensPerSecond} />;
+    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} forkEntryId={forkEntryId} onFork={onFork} forking={forking} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} hideThinking={hideThinking} sourceBlockIndices={sourceBlockIndices} liveTokensPerSecond={liveTokensPerSecond} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -285,6 +287,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.sessionId === next.sessionId
     && prev.toolCallsDefaultCollapsed === next.toolCallsDefaultCollapsed
     && prev.hideThinking === next.hideThinking
+    && prev.sourceBlockIndices?.join() === next.sourceBlockIndices?.join()
     && (!prev.isStreaming || prev.liveTokensPerSecond === next.liveTokensPerSecond);
 });
 
@@ -531,6 +534,7 @@ function AssistantMessageView({
   forking,
   toolCallsDefaultCollapsed,
   hideThinking,
+  sourceBlockIndices,
   liveTokensPerSecond,
 }: {
   message: AssistantMessage;
@@ -549,6 +553,7 @@ function AssistantMessageView({
   forking?: boolean;
   toolCallsDefaultCollapsed: boolean;
   hideThinking: boolean;
+  sourceBlockIndices?: number[];
   liveTokensPerSecond?: number | null;
 }) {
   const { t, locale } = useI18n();
@@ -566,7 +571,7 @@ function AssistantMessageView({
   const texts = (message.content ?? []).filter((block): block is TextContent => block.type === "text").map((block) => block.text);
   const canFork = !!forkEntryId && !!onFork;
   const blockItems = (message.content ?? [])
-    .map((block, originalIndex) => ({ block, originalIndex }))
+    .map((block, index) => ({ block, originalIndex: sourceBlockIndices?.[index] ?? index }))
     .filter(({ block }) => !(hideThinking && block.type === "thinking") && !isEmptyThinkingBlock(block, { isStreaming }));
   const blocks = blockItems.map(({ block }) => block);
   const hasActivityBlocks = blocks.some((block) => block.type === "thinking" || block.type === "toolCall");

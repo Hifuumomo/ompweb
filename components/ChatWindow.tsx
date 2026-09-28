@@ -227,7 +227,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-type RenderMessage = (idx: number, options?: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean }) => ReactNode;
+type RenderMessage = (idx: number, options?: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; sourceBlockIndices?: number[] }) => ReactNode;
 
 /** Render a folded activity run; consecutive tool calls cluster into one row. */
 function renderActivityPieces(messages: AgentMessage[], pieces: ActivityPiece[], renderMessage: RenderMessage): ReactNode[] {
@@ -267,6 +267,7 @@ function renderActivityPieces(messages: AgentMessage[], pieces: ActivityPiece[],
           keyPrefix: `activity-block-${piece.index}-${bIdx}`,
           messageOverride: { ...withAssistantBlocks(msg, [block], { omitUsage: true }), errorMessage: undefined },
           showTimestamp: false,
+          sourceBlockIndices: [msg.content.indexOf(block)],
         }),
       );
     });
@@ -328,7 +329,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
     messageRefs.current[refIndex] = el;
   };
 
-  const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean } = {}): ReactNode => {
+  const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; sourceBlockIndices?: number[] } = {}): ReactNode => {
     const msg = options.messageOverride ?? messages[idx];
     const prevAssistantEntryId =
       msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
@@ -374,6 +375,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
         sessionId={sessionId}
         toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
         hideThinking={hideThinkingBlock}
+        sourceBlockIndices={options.sourceBlockIndices}
       />
     );
     if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;

@@ -69,6 +69,8 @@ export function planTurnSegments(
     const msg = messages[idx];
     // Tool results render inline under their tool call inside the fold.
     if (msg.role === "toolResult") continue;
+    // Mount notices never render; counting them would show an empty fold.
+    if (msg.role === "custom" && (msg as CustomMessage).customType === "xdev-mount-notice") continue;
     if (msg.role !== "assistant") {
       // Job results, reminders, and other notices are activity, as in the TUI.
       addActivity({ index: idx }, 0);

@@ -488,6 +488,25 @@ test("developer reminders show their wrapper attributes, start collapsed, and to
   assert.doesNotMatch(view.container.textContent, /One-line wrappers/);
 });
 
+test("a deferred thinking block rendered from a block subset loads its source block", async (t) => {
+  const requested = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    return new Response(JSON.stringify({ thinking: "loaded" }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const view = render(React.createElement(MessageView, {
+    message: { role: "assistant", provider: "t", model: "m", content: [{ type: "thinking", thinking: "", deferred: true }] },
+    sessionId: "s1",
+    entryId: "e1",
+    sourceBlockIndices: [2],
+  }));
+  await act(async () => { fireEvent.click(view.container.querySelector(".activity-row-trigger")); });
+  assert.equal(requested.length, 1);
+  assert.match(requested[0], /\/entries\/e1\/thinking\?blockIndex=2$/);
+});
+
 test("a running tool call shows a spinner instead of the no-result marker", () => {
   const html = renderToStaticMarkup(React.createElement(MessageView, {
     message: {
