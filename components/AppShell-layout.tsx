@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+import { CircleAlert, MessageSquareText } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
 export function projectLabel(projectPath: string): string {
@@ -53,11 +55,46 @@ export function loadRightPanelWidth(): number | null {
   }
 }
 
-export function PanelLoadingFallback() {
-  const { t } = useI18n();
+type WorkspaceStateKind = "loading" | "error" | "empty";
+
+export function WorkspaceState({
+  kind,
+  title,
+  detail,
+}: {
+  kind: WorkspaceStateKind;
+  title: string;
+  detail?: ReactNode;
+}) {
   return (
-    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
-      {t("appShell.loading")}
+    <div
+      className={`workspace-state workspace-state-${kind}`}
+      role={kind === "error" ? "alert" : kind === "loading" ? "status" : undefined}
+      aria-busy={kind === "loading" ? true : undefined}
+      aria-label={kind === "loading" ? title : undefined}
+    >
+      <div className="workspace-state-surface">
+        {kind === "loading" ? (
+          <div className="workspace-state-skeleton" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        ) : kind === "error" ? (
+          <CircleAlert className="workspace-state-icon" size={18} strokeWidth={1.8} aria-hidden="true" />
+        ) : (
+          <MessageSquareText className="workspace-state-icon" size={18} strokeWidth={1.8} aria-hidden="true" />
+        )}
+        <div className="workspace-state-copy">
+          <div className="workspace-state-title">{title}</div>
+          {detail ? <div className="workspace-state-detail">{detail}</div> : null}
+        </div>
+      </div>
     </div>
   );
+}
+
+export function PanelLoadingFallback() {
+  const { t } = useI18n();
+  return <WorkspaceState kind="loading" title={t("appShell.loading")} />;
 }

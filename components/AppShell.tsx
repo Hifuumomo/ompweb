@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSidebarHistory } from "@/hooks/useSidebarHistory";
+import { useModalDialog } from "@/hooks/useModalDialog";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
 import { toast } from "./ui/toast";
@@ -15,11 +16,14 @@ import { type FileExplorerHandle } from "./FileExplorer";
 import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
-import { Check, Folder, History, Menu, PanelLeft, Terminal, Wand2, Zap } from "lucide-react";
+import { CommandPaletteMount } from "./CommandPaletteMount";
+import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, X, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
+import { formatGenerationSpeed } from "@/lib/generation-speed";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useIsCompactOverlay } from "@/hooks/useIsCompactOverlay";
 import { copyText } from "@/lib/clipboard";
 import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
@@ -56,6 +60,7 @@ import {
   loadRightPanelWidth,
   loadSidebarWidth,
   projectLabel,
+  WorkspaceState,
 } from "./AppShell-layout";
 import type { ManagedProject, SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
@@ -81,10 +86,8 @@ const RightPanel = dynamic(() => import("./RightPanel").then((m) => m.RightPanel
 
 const TOOL_CALLS_COLLAPSED_STORAGE_KEY = "omp-web:tool-calls-collapsed";
 const PROVIDER_USAGE_VISIBLE_STORAGE_KEY = "omp-web:provider-usage-visible";
+const NATIVE_SELECT_ALL_STORAGE_KEY = "omp-web:scope-native-select-all";
 
-const CommandPalette = dynamic(() => import("./CommandPalette").then((m) => m.CommandPalette), {
-  ssr: false,
-});
 
 type AutoNameStatus =
   | { kind: "idle" }
@@ -97,8 +100,9 @@ export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [initialNavigation] = useState(() => getInitialNavigation(searchParams));
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const isMobile = useIsMobile();
+  const isCompactOverlay = useIsCompactOverlay();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -123,17 +127,22 @@ export function AppShell() {
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_DEFAULT_WIDTH);
   const [toolCallsDefaultCollapsed, setToolCallsDefaultCollapsed] = useState(true);
   const [providerUsageVisible, setProviderUsageVisible] = useState(true);
+  const [scopeNativeSelectAll, setScopeNativeSelectAll] = useState(false);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   // Active drag handlers so an unmount mid-drag can detach them.
   const sidebarResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
   // DOM element + live width during a drag (see handleSidebarResizeStart).
-  const sidebarContainerRef = useRef<HTMLDivElement>(null);
+  const sidebarContainerRef = useModalDialog<HTMLElement>({
+    onClose: () => setSidebarOpen(false),
+    active: isMobile && mobileSidebarReady && sidebarOpen && !settingsTab,
+  });
   const pendingSidebarWidthRef = useRef<number>(SIDEBAR_DEFAULT_WIDTH);
   useEffect(() => {
     setSidebarWidth(loadSidebarWidth());
     try {
       setToolCallsDefaultCollapsed(window.localStorage.getItem(TOOL_CALLS_COLLAPSED_STORAGE_KEY) !== "false");
       setProviderUsageVisible(window.localStorage.getItem(PROVIDER_USAGE_VISIBLE_STORAGE_KEY) !== "false");
+      setScopeNativeSelectAll(window.localStorage.getItem(NATIVE_SELECT_ALL_STORAGE_KEY) === "true");
     } catch {
       // Keep the compact default when storage is unavailable.
     }
@@ -150,6 +159,14 @@ export function AppShell() {
     setProviderUsageVisible(visible);
     try {
       window.localStorage.setItem(PROVIDER_USAGE_VISIBLE_STORAGE_KEY, String(visible));
+    } catch {
+      // The preference still applies for this page load.
+    }
+  }, []);
+  const handleScopeNativeSelectAllChange = useCallback((enabled: boolean) => {
+    setScopeNativeSelectAll(enabled);
+    try {
+      window.localStorage.setItem(NATIVE_SELECT_ALL_STORAGE_KEY, String(enabled));
     } catch {
       // The preference still applies for this page load.
     }
@@ -225,6 +242,7 @@ export function AppShell() {
     }
   }, [advanceAppUpdateVisibleStage]);
   const [ompUpdateAvailable, setOmpUpdateAvailable] = useState(false);
+  const [ompUpdatesDisabled, setOmpUpdatesDisabled] = useState(false);
   // Bumped on visibilitychange so the mount-time update checks re-run.
   const [updateCheckKey, setUpdateCheckKey] = useState(0);
   // On mobile the sidebar is an overlay drawer; hide it by default so the chat
@@ -257,8 +275,9 @@ export function AppShell() {
       signal: controller.signal,
     })
       .then((response) => response.ok ? response.json() : null)
-      .then((data: { currentVersion?: string | null; availableVersion?: string | null; updateAvailable?: boolean; updateCommand?: string } | null) => {
+      .then((data: { currentVersion?: string | null; availableVersion?: string | null; updateAvailable?: boolean; updateCommand?: string; updatesDisabled?: boolean } | null) => {
         setOmpUpdateAvailable(Boolean(data?.updateAvailable));
+        setOmpUpdatesDisabled(Boolean(data?.updatesDisabled));
         if (!data?.updateAvailable || !data.availableVersion) return;
         // This check re-runs on every visibilitychange back to the tab, so a
         // version the user already dismissed must not be re-announced.
@@ -654,6 +673,40 @@ export function AppShell() {
 
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | null>(null);
+  const mobileToolsRef = useRef<HTMLDetailsElement>(null);
+  const mobileToolsContentRef = useRef<HTMLDivElement>(null);
+  const restoreToolsFocusRef = useRef(false);
+  const [compactTopbar, setCompactTopbar] = useState<boolean | null>(null);
+  useLayoutEffect(() => {
+    if (compactTopbar && restoreToolsFocusRef.current) {
+      mobileToolsRef.current?.querySelector("summary")?.focus();
+      restoreToolsFocusRef.current = false;
+    }
+  }, [compactTopbar]);
+  useEffect(() => {
+    if (!compactTopbar) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      const tools = mobileToolsRef.current;
+      if (tools?.open && !tools.contains(event.target as Node)) {
+        tools.open = false;
+        setActiveTopPanel(null);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const tools = mobileToolsRef.current;
+      // Nested pickers and session panels handle their own Escape first.
+      if (event.key !== "Escape" || event.defaultPrevented || activeTopPanel || !tools?.open) return;
+      event.stopPropagation();
+      tools.open = false;
+      tools.querySelector("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [compactTopbar, activeTopPanel]);
   const toggleTopPanel = useCallback((panel: "branches" | "system") => {
     if (isMobile) setSidebarOpen(false);
     setActiveTopPanel((cur) => cur === panel ? null : panel);
@@ -687,7 +740,10 @@ export function AppShell() {
   }, []);
 
   const handleSidebarToggle = useCallback(() => {
-    if (isMobile) setActiveTopPanel(null);
+    if (isMobile) {
+      setActiveTopPanel(null);
+      if (mobileToolsRef.current) mobileToolsRef.current.open = false;
+    }
     setSidebarOpen((open) => !open);
   }, [isMobile]);
 
@@ -885,16 +941,24 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
   const [rightView, setRightView] = useState<"explorer" | "git" | "file">("explorer");
   // User-chosen pixel width (null = fluid 42% default), persisted.
   const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
-  const rightPanelRef = useRef<HTMLDivElement>(null);
+  const rightPanelRef = useModalDialog<HTMLDivElement>({
+    onClose: () => setRightPanelOpen(false),
+    active: isCompactOverlay && rightPanelHasOpened && rightPanelOpen && !settingsTab,
+  });
+  const rightPanelIsModal = isCompactOverlay && rightPanelHasOpened && rightPanelOpen && !settingsTab;
   const pendingRightPanelWidthRef = useRef<number | null>(null);
   const rightResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
   useEffect(() => {
     setRightPanelWidth(loadRightPanelWidth());
   }, []);
+  useEffect(() => {
+    if (rightPanelOpen) setRightPanelHasOpened(true);
+  }, [rightPanelOpen]);
   // One-shot request asking the explorer tab to expand + scroll to a file.
   const [revealPath, setRevealPath] = useState<string | null>(null);
   const [fileSearchOpen, setFileSearchOpen] = useState(false);
@@ -1025,7 +1089,10 @@ export function AppShell() {
     setSettingsTab(null);
     // Re-picking the current conversation still closes/rearms the drawer,
     // without remounting the chat or disturbing its draft.
-    if (isMobile && !isRestore) setSidebarOpen(false);
+    if (isMobile && !isRestore) {
+      setSidebarOpen(false);
+      requestAnimationFrame(() => chatInputRef.current?.focus());
+    }
     if (!isRestore && session.id === selectedSession?.id) return;
     setNewSessionCwd(null);
     setSelectedSession(session);
@@ -1058,14 +1125,19 @@ export function AppShell() {
     setSystemPrompt(null);
     setSystemPromptLoading(false);
     setActiveTopPanel(null);
-    if (isMobile) setSidebarOpen(false);
+    if (isMobile) {
+      setSidebarOpen(false);
+      requestAnimationFrame(() => chatInputRef.current?.focus());
+    }
     router.replace("/", { scroll: false });
   }, [router, isMobile]);
+
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
+    scopeNativeSelectAll,
   });
 
   // Client-built transient SessionInfo (new session / fork) lacks the
@@ -1349,6 +1421,63 @@ export function AppShell() {
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
   const newSessionProject = (workspaceOptions.cwd === effectiveNewSessionCwd ? workspaceOptions.selectedProject : null) ?? effectiveNewSessionCwd ?? "";
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+  const currentRate = generationSpeed?.current;
+  const rate = currentRate ?? generationSpeed?.average;
+  const speed = showChat ? formatGenerationSpeed(rate) : null;
+  const hasGenerationSpeed = speed !== null;
+  useLayoutEffect(() => {
+    const header = topBarRef.current;
+    const details = mobileToolsRef.current;
+    const content = mobileToolsContentRef.current;
+    const right = header?.querySelector<HTMLElement>("[data-topbar-right-group]");
+    const tools = header?.querySelector<HTMLElement>(".shell-topbar-tools");
+    if (!header || !details || !content || !right || !tools) return;
+    const update = () => {
+      const hadControlsFocus = content.contains(document.activeElement);
+      // Measure the real controls even while their disclosure is closed.
+      const closed = !details.open;
+      const display = content.style.display;
+      const visibility = content.style.visibility;
+      content.style.visibility = "hidden";
+      content.style.display = "flex";
+      details.open = true;
+      const children = Array.from(content.children).filter((child) =>
+        !["absolute", "fixed"].includes(getComputedStyle(child).position));
+      const contentStyle = getComputedStyle(content);
+      const headerStyle = getComputedStyle(header);
+      const rightStyle = getComputedStyle(right);
+      const controlsWidth = children.reduce((width, child) => {
+        const style = getComputedStyle(child);
+        return width + child.getBoundingClientRect().width
+          + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
+      }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
+      const required = controlsWidth
+        + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
+        + parseFloat(getComputedStyle(tools).columnGap)
+        + parseFloat(headerStyle.paddingLeft) + parseFloat(headerStyle.paddingRight)
+        + parseFloat(headerStyle.columnGap)
+        + parseFloat(rightStyle.minWidth)
+        + parseFloat(rightStyle.paddingLeft) + parseFloat(rightStyle.paddingRight);
+      if (closed) details.open = false;
+      content.style.display = display;
+      content.style.visibility = visibility;
+      const compact = required > header.clientWidth;
+      if (compact && details.dataset.compact !== "true" && hadControlsFocus) {
+        restoreToolsFocusRef.current = true;
+      }
+      setCompactTopbar(compact);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(header);
+    observer.observe(content);
+    for (const child of content.children) observer.observe(child);
+    document.fonts.addEventListener("loadingdone", update);
+    update();
+    return () => {
+      observer.disconnect();
+      document.fonts.removeEventListener("loadingdone", update);
+    };
+  }, [hasGenerationSpeed, isMobile, locale, rightPanelOpen, showChat]);
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
 
@@ -1416,7 +1545,7 @@ export function AppShell() {
         danger
         onConfirm={sidebarHistory.leave}
       />
-      <CommandPalette
+      <CommandPaletteMount
         onSelectSession={handleSelectSession}
         onNewSession={() => {
           // An empty cwd is truthy, so showChat would render the shell while
@@ -1499,8 +1628,10 @@ export function AppShell() {
           box-shadow: none;
         }
       }
-    `}</style>
-    <div style={{ display: "flex", height: "100%", flex: 1, overflow: "hidden", background: "var(--bg)" }}>
+    `}
+    </style>
+    <a href="#main-content" className="skip-link">{t("appShell.skipToContent")}</a>
+    <div style={{ display: "flex", height: "100%", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", background: "var(--bg)" }}>
       {/* Left sidebar: hidden on full-page Settings */}
       {!settingsTab && (
         <>
@@ -1519,12 +1650,16 @@ export function AppShell() {
         }}
       />
 
-      {/* Left sidebar */}
-      <div
+      <nav
+        id="workspace-sidebar"
+        role={isMobile ? "dialog" : undefined}
+        aria-modal={isMobile ? true : undefined}
+        tabIndex={-1}
         ref={sidebarContainerRef}
         className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}${sidebarResizing ? " sidebar-resizing" : ""}`}
-        aria-hidden={mobileSidebarReady && !sidebarOpen ? true : undefined}
-        inert={mobileSidebarReady && !sidebarOpen ? true : undefined}
+        aria-label={t("projects.heading")}
+        aria-hidden={mobileSidebarReady && (!sidebarOpen || rightPanelIsModal) ? true : undefined}
+        inert={mobileSidebarReady && (!sidebarOpen || rightPanelIsModal) ? true : undefined}
         style={{
           background: "var(--bg-panel)",
           borderRight: "1px solid var(--border)",
@@ -1537,11 +1672,12 @@ export function AppShell() {
         }}
       >
         {sidebarContent}
-      </div>
+      </nav>
 
       {/* Resize handle — desktop only, hidden while the sidebar is closed */}
       {!isMobile && sidebarOpen && (
         <div
+          className="sidebar-resize-handle"
           role="separator"
           aria-orientation="vertical"
           aria-label={t("appShell.resizeSidebar")}
@@ -1570,7 +1706,7 @@ export function AppShell() {
       )}
 
       {/* Center: chat */}
-      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+      <main id="main-content" tabIndex={-1} inert={rightPanelIsModal ? true : undefined} style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden" }}>
         {settingsTab ? (
           <SettingsConfig
             activeTab={settingsTab}
@@ -1578,11 +1714,15 @@ export function AppShell() {
             onToolCallsDefaultCollapsedChange={handleToolCallsDefaultCollapsedChange}
             providerUsageVisible={providerUsageVisible}
             onProviderUsageVisibleChange={handleProviderUsageVisibleChange}
+            scopeNativeSelectAll={scopeNativeSelectAll}
+            onScopeNativeSelectAllChange={handleScopeNativeSelectAllChange}
             cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd}
             sessionId={selectedSession?.id ?? null}
             onModelsSaved={() => setModelsRefreshKey((k) => k + 1)}
             onPluginsReloaded={() => setSessionKey((k) => k + 1)}
             appUpdate={appUpdate}
+            ompUpdateAvailable={ompUpdateAvailable}
+            ompUpdatesDisabled={ompUpdatesDisabled}
             onRefreshAppUpdate={refreshAppUpdate}
             onOmpUpdateAvailabilityChange={setOmpUpdateAvailable}
             onRequestAppUpdate={requestAppUpdateFromSettings}
@@ -1597,9 +1737,9 @@ export function AppShell() {
           alignItems: "center",
           flexShrink: 0,
           borderBottom: "1px solid var(--border)",
-          minHeight: isMobile ? 44 : 36,
+          minHeight: isMobile ? "calc(44px + env(safe-area-inset-top))" : 36,
           background: "var(--bg-panel)",
-          padding: isMobile ? "0 4px" : "0 8px",
+          padding: isMobile ? "env(safe-area-inset-top) 4px 0" : "0 8px",
           gap: "0 8px",
           minWidth: 0,
         }}>
@@ -1607,14 +1747,57 @@ export function AppShell() {
           <div className="shell-topbar-tools" style={{ display: "flex", alignItems: "center", gap: 4, height: isMobile ? 43 : 35, minWidth: 0, flexShrink: 0 }}>
             <button
               onClick={handleSidebarToggle}
+              aria-expanded={sidebarOpen}
+              aria-controls="workspace-sidebar"
               title={sidebarOpen ? t("appShell.hideSidebar") : t("appShell.showSidebar")}
               aria-label={sidebarOpen ? t("appShell.hideSidebar") : t("appShell.showSidebar")}
               className="shell-toolbar-btn ui-focus-ring"
             >
               {sidebarOpen ? <PanelLeft size={16} strokeWidth={1.8} aria-hidden="true" /> : <Menu size={16} strokeWidth={1.8} aria-hidden="true" />}
             </button>
+            <details
+              ref={mobileToolsRef}
+              className="shell-topbar-overflow"
+              data-compact={isMobile ? "true" : compactTopbar === null ? "pending" : compactTopbar}
+              open={isMobile ? undefined : compactTopbar ? undefined : true}
+              onToggle={(event) => {
+                if (!event.currentTarget.open) setActiveTopPanel(null);
+              }}
+            >
+              <summary
+                className="shell-toolbar-btn ui-focus-ring"
+                title={t("chatInput.moreControls")}
+                aria-label={t("chatInput.moreControls")}
+              >
+                <Ellipsis size={16} strokeWidth={1.8} aria-hidden="true" />
+              </summary>
+              <div ref={mobileToolsContentRef} className="shell-topbar-overflow-content">
+                {showChat && (
+                  <span
+                    className="shell-mobile-context"
+                    title={`${projectLabel(selectedSession?.projectRoot ?? selectedSession?.cwd ?? activeCwd ?? "")} · ${selectedSession?.name || selectedSession?.firstMessage || t("appShell.newSession")}`}
+                  >
+                    {selectedSession?.name || selectedSession?.firstMessage || t("appShell.newSession")}
+                  </span>
+                )}
             <ThemeSwitcher />
             <LanguageSwitcher />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isMobile && mobileToolsRef.current) {
+                      mobileToolsRef.current.open = false;
+                      setActiveTopPanel(null);
+                    }
+                    window.dispatchEvent(new Event("omp:open-command-palette"));
+                  }}
+                  title={`${t("commandPalette.label")} (Ctrl/⌘ K)`}
+                  aria-label={t("commandPalette.label")}
+                  aria-keyshortcuts="Control+K Meta+K"
+                  className="shell-toolbar-btn ui-focus-ring"
+                >
+                  <Command size={16} strokeWidth={1.8} aria-hidden="true" />
+                </button>
             {showChat && (
               <>
                 <div className="shell-toolbar-divider" aria-hidden="true" />
@@ -1632,7 +1815,7 @@ export function AppShell() {
                   activeLeafId={branchActiveLeafId}
                   onLeafChange={handleBranchLeafChange}
                   inline
-                  containerRef={topBarRef}
+                  containerRef={compactTopbar ? mobileToolsContentRef : topBarRef}
                   open={activeTopPanel === "branches"}
                   onToggle={() => toggleTopPanel("branches")}
                   hasSession
@@ -1649,6 +1832,55 @@ export function AppShell() {
                 </button>
               </>
             )}
+          {activeTopPanel === "system" && (
+            <div data-top-panel className="dropdown-surface" style={{
+              position: "absolute",
+              top: "calc(100% + 4px)",
+              left: isMobile ? 4 : 8,
+              right: "auto",
+              width: "auto",
+              minWidth: isMobile ? undefined : 420,
+              maxWidth: "min(680px, calc(100vw - 24px))",
+              maxHeight: "min(70vh, calc(100dvh - 56px))",
+              overflowY: "auto",
+              overflowX: "hidden",
+              zIndex: 500,
+            }}>
+              {activeTopPanel === "system" && (
+                <div className="session-info-popover" style={{
+                  background: "var(--bg-panel)",
+                  borderBottom: "1px solid var(--border)",
+                  boxShadow: "var(--shadow-pop)",
+                  minWidth: isMobile ? undefined : 420,
+                }}>
+                  {systemPrompt ? (
+                    <div style={{
+                      maxHeight: "min(600px, 75vh)",
+                      overflowY: "auto",
+                      padding: "12px 16px",
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                      whiteSpace: "pre-wrap",
+                      fontFamily: "var(--font-mono)",
+                    }}>
+                      {systemPrompt}
+                    </div>
+                  ) : systemPrompt === "" ? (
+                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+                      {t("appShell.systemPromptEmpty")}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+                      {systemPromptLoading ? t("appShell.systemPromptLoading") : t("appShell.systemPromptLoadHint")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+              </div>
+            </details>
           </div>
 
           {/* Center Zone: Workspace & Session Breadcrumb + Auto-name action */}
@@ -1709,7 +1941,7 @@ export function AppShell() {
                   }}
                 >
                   {effectiveProject ? (
-                    <>
+                    <span className="shell-topbar-project-context" style={{ display: "contents" }}>
                       <Folder size={12} strokeWidth={1.8} style={{ opacity: 0.6, flexShrink: 0 }} aria-hidden="true" />
                       <span
                         style={{
@@ -1726,7 +1958,7 @@ export function AppShell() {
                         {projectLabel(effectiveProject)}
                       </span>
                       <span style={{ color: "var(--text-dim)", flexShrink: 0, opacity: 0.5 }}>/</span>
-                    </>
+                    </span>
                   ) : null}
                   <span
                     style={{
@@ -1794,8 +2026,10 @@ export function AppShell() {
               justifyContent: "flex-end",
               gap: 6,
               paddingRight: rightPanelOpen ? 8 : 44,
-              minWidth: 0,
-              width: 200,
+              minWidth: hasGenerationSpeed ? "calc(10ch + 33px)" : 0,
+              width: hasGenerationSpeed ? 200 : 0,
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
               containerType: "inline-size",
               containerName: "topbar-speed",
               flexShrink: 1,
@@ -1804,20 +2038,17 @@ export function AppShell() {
 
             {/* Generation speed pill */}
             {showChat && (() => {
-              const currentSpeedStr = generationSpeed?.current !== null && generationSpeed?.current !== undefined
-                ? `${generationSpeed.current.toFixed(1)} t/s`
-                : null;
-              const averageSpeedStr = generationSpeed?.average !== null && generationSpeed?.average !== undefined
-                ? `${generationSpeed.average.toFixed(1)} t/s`
-                : null;
-              if (!currentSpeedStr && !averageSpeedStr) return null;
-              const speedTitle = currentSpeedStr
-                ? t("appShell.tooltipCurrentSpeed", { value: currentSpeedStr })
-                : t("appShell.tooltipAverageSpeed", { value: averageSpeedStr! });
+              if (!speed || rate == null) return null;
+              const isLive = currentRate != null;
+              const speedTitle = t(isLive ? "appShell.tooltipCurrentSpeed" : "appShell.tooltipAverageSpeed", {
+                value: `${rate.toFixed(1)} t/s`,
+              });
 
               return (
                 <div
                   title={speedTitle}
+                  role="img"
+                  aria-label={speedTitle}
                   className="shell-metric-pill shell-pill-extra"
                   style={{
                     display: "inline-flex",
@@ -1828,76 +2059,29 @@ export function AppShell() {
                     borderRadius: "var(--radius-control)",
                     border: "1px solid var(--border)",
                     background: "var(--bg-subtle)",
-                    color: currentSpeedStr ? "var(--accent)" : "var(--text-muted)",
+                    color: isLive ? "var(--accent)" : "var(--text-muted)",
                     fontSize: 11,
                     fontFamily: "var(--font-mono)",
                     fontVariantNumeric: "tabular-nums",
                     whiteSpace: "nowrap",
                     cursor: "default",
-                    minWidth: 0,
-                    overflow: "hidden",
-                    flexShrink: 1,
+                    width: "calc(10ch + 33px)",
+                    flexShrink: 0,
                   }}
                 >
-                  {currentSpeedStr ? (
+                  {isLive ? (
                     <Zap size={11} strokeWidth={2} aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }} />
                   ) : (
-                    <span style={{ flexShrink: 0, color: "var(--text-dim)" }}>AVG</span>
+                    <span aria-hidden="true" style={{ width: 11, lineHeight: "11px", textAlign: "center", flexShrink: 0, color: "var(--text-dim)" }}>~</span>
                   )}
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", fontWeight: currentSpeedStr ? 600 : 400 }}>
-                    {currentSpeedStr ?? averageSpeedStr}
+                  <span style={{ display: "inline-flex", gap: "1ch", fontWeight: isLive ? 600 : 400 }}>
+                    <span style={{ width: "5ch", textAlign: "right" }}>{speed.value}</span>
+                    <span style={{ width: "4ch" }}>{speed.unit}</span>
                   </span>
                 </div>
               );
             })()}
           </div>
-          {activeTopPanel === "system" && (
-            <div data-top-panel className="dropdown-surface" style={{
-              position: "absolute",
-              top: "calc(100% + 4px)",
-              left: isMobile ? 4 : 8,
-              right: "auto",
-              width: "auto",
-              minWidth: isMobile ? undefined : 420,
-              maxWidth: "min(680px, calc(100vw - 24px))",
-              maxHeight: "min(70vh, calc(100dvh - 56px))",
-              overflowY: "auto",
-              overflowX: "hidden",
-              zIndex: 500,
-            }}>
-              {activeTopPanel === "system" && (
-                <div className="session-info-popover" style={{
-                  background: "var(--bg-panel)",
-                  borderBottom: "1px solid var(--border)",
-                  boxShadow: "var(--shadow-pop)",
-                  minWidth: isMobile ? undefined : 420,
-                }}>
-                  {systemPrompt ? (
-                    <div style={{
-                      maxHeight: "min(600px, 75vh)",
-                      overflowY: "auto",
-                      padding: "12px 16px",
-                      color: "var(--text-muted)",
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "var(--font-mono)",
-                    }}>
-                      {systemPrompt}
-                    </div>
-                  ) : systemPrompt === "" ? (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      {t("appShell.systemPromptEmpty")}
-                    </div>
-                  ) : (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      {systemPromptLoading ? t("appShell.systemPromptLoading") : t("appShell.systemPromptLoadHint")}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
 
         </div>
 
@@ -1909,43 +2093,48 @@ export function AppShell() {
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
               newSessionWorkspace={effectiveNewSessionCwd && (
-                <div className="mb-4 flex min-w-0 flex-col gap-2">
-                  <label htmlFor="new-session-workspace" style={{ fontSize: 13, fontWeight: 500, color: "var(--text-muted)" }}>
+                <div className="new-session-workspace">
+                  <label id="new-session-workspace-label" htmlFor="new-session-workspace" className="new-session-workspace-label">
                     {t("settingsConfig.chipWorkspace")}
                   </label>
-                  <select
-                    id="new-session-workspace"
-                    aria-describedby="new-session-workspace-path"
-                    value={effectiveNewSessionCwd}
-                    onChange={(event) => {
-                      const cwd = event.target.value;
-                      if (!cwd) {
-                        setAddProjectOpen(true);
-                        return;
-                      }
-                      if (cwd === effectiveNewSessionCwd) return;
-                      suppressCwdRef.current = cwd;
-                      setActiveCwd(cwd);
-                      handleNewSession("", cwd);
-                    }}
-                    style={{ width: "100%", minWidth: 0, minHeight: 44, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", fontSize: 16 }}
-                  >
-                    {!workspaceOptions.projects.some((project) => comparableProjectPath(project.path) === comparableProjectPath(newSessionProject)) && (
-                      <option value={effectiveNewSessionCwd}>{projectLabel(effectiveNewSessionCwd)}</option>
-                    )}
-                    {workspaceOptions.projects.map((project) => {
-                      const current = comparableProjectPath(project.path) === comparableProjectPath(newSessionProject);
-                      const label = project.alias ?? projectLabel(project.path);
-                      const duplicate = workspaceOptions.projects.some((other) => other.path !== project.path && (other.alias ?? projectLabel(other.path)) === label);
-                      return (
-                        <option key={project.path} value={current ? effectiveNewSessionCwd : project.path}>
-                          {duplicate ? `${label} — ${project.path}` : label}
-                        </option>
-                      );
-                    })}
-                    <option value="">+ {t("projects.add")}</option>
-                  </select>
-                  <div id="new-session-workspace-path" style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>
+                  <div className="new-session-workspace-control">
+                    <span className="new-session-workspace-icon" aria-hidden="true">
+                      <Folder size={17} strokeWidth={1.8} />
+                    </span>
+                    <select
+                      id="new-session-workspace"
+                      aria-describedby="new-session-workspace-path"
+                      value={effectiveNewSessionCwd}
+                      onChange={(event) => {
+                        const cwd = event.target.value;
+                        if (!cwd) {
+                          setAddProjectOpen(true);
+                          return;
+                        }
+                        if (cwd === effectiveNewSessionCwd) return;
+                        suppressCwdRef.current = cwd;
+                        setActiveCwd(cwd);
+                        handleNewSession("", cwd);
+                      }}
+                    >
+                      {!workspaceOptions.projects.some((project) => comparableProjectPath(project.path) === comparableProjectPath(newSessionProject)) && (
+                        <option value={effectiveNewSessionCwd}>{projectLabel(effectiveNewSessionCwd)}</option>
+                      )}
+                      {workspaceOptions.projects.map((project) => {
+                        const current = comparableProjectPath(project.path) === comparableProjectPath(newSessionProject);
+                        const label = project.alias ?? projectLabel(project.path);
+                        const duplicate = workspaceOptions.projects.some((other) => other.path !== project.path && (other.alias ?? projectLabel(other.path)) === label);
+                        return (
+                          <option key={project.path} value={current ? effectiveNewSessionCwd : project.path}>
+                            {duplicate ? `${label} — ${project.path}` : label}
+                          </option>
+                        );
+                      })}
+                      <option value="">+ {t("projects.add")}</option>
+                    </select>
+                    <ChevronDown className="new-session-workspace-chevron" size={16} strokeWidth={1.8} aria-hidden="true" />
+                  </div>
+                  <div id="new-session-workspace-path" className="new-session-workspace-path" title={effectiveNewSessionCwd}>
                     {effectiveNewSessionCwd}
                   </div>
                 </div>
@@ -1966,35 +2155,28 @@ export function AppShell() {
               toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
             />
           ) : initialCwdStatus === "validating" ? (
-            <div
-              role="status"
-              style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-            >
-              <div style={{ fontSize: 14, color: "var(--text)" }}>{t("appShell.openingWorkspace")}</div>
-              <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {initialNavigation.requestedCwd}
-              </div>
-            </div>
+            <WorkspaceState
+              kind="loading"
+              title={t("appShell.openingWorkspace")}
+              detail={<span className="workspace-state-path">{initialNavigation.requestedCwd}</span>}
+            />
           ) : initialCwdStatus === "error" ? (
-            <div
-              role="alert"
-              style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-            >
-              <div style={{ fontSize: 14, color: "var(--status-error)" }}>{t("appShell.unableToOpenWorkspace")}</div>
-              <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {initialNavigation.requestedCwd}
-              </div>
-              <div style={{ maxWidth: 720, fontSize: 12 }}>{initialCwdError}</div>
-            </div>
+            <WorkspaceState
+              kind="error"
+              title={t("appShell.unableToOpenWorkspace")}
+              detail={(
+                <>
+                  <span className="workspace-state-path">{initialNavigation.requestedCwd}</span>
+                  <span>{initialCwdError}</span>
+                </>
+              )}
+            />
           ) : !showPlaceholder ? (
             <PanelLoadingFallback />
+          ) : activeCwd ? (
+            <WorkspaceState kind="empty" title={t("appShell.selectSessionHint")} />
           ) : (
-            activeCwd ? (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 16 }}>
-                <span className="display-serif">{t("appShell.selectSessionHint")}</span>
-              </div>
-            ) : (
-              <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
+              <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none" }}>
                 <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
                   <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
                 </svg>
@@ -2015,16 +2197,34 @@ export function AppShell() {
                         </>
                       );
                     })()}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarOpen(true);
+                      setAddProjectOpen(true);
+                    }}
+                    style={{ display: "flex", alignItems: "center", gap: 6, width: "fit-content", minHeight: 36, marginTop: 12, padding: "7px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 12, fontWeight: 600, boxShadow: "var(--shadow-card)" }}
+                    className="ui-focus-ring"
+                  >
+                    <Folder size={14} strokeWidth={1.8} aria-hidden="true" />
+                    {t("appShell.openWorkspaces")}
+                  </button>
                   </div>
                 </div>
               </div>
-            )
           )}
         </div>
           </>
         )}
       </main>
-      {!settingsTab && (
+      {!settingsTab && rightPanelHasOpened && rightPanelIsModal && (
+        <div
+          className="right-panel-backdrop"
+          aria-hidden="true"
+          onClick={() => setRightPanelOpen(false)}
+        />
+      )}
+      {!settingsTab && rightPanelHasOpened && (
         <RightPanel
         fileTabs={fileTabs}
         activeFileTabId={activeFileTabId}
@@ -2049,6 +2249,7 @@ export function AppShell() {
         explorerIsRepo={explorerIsRepo}
         explorerRefreshing={explorerRefreshing}
         isMobile={isMobile}
+        isCompactOverlay={isCompactOverlay}
         onOpenFile={handleOpenFile}
         onSelectFileTab={handleSelectFileTab}
         onCloseFileTab={handleCloseFileTab}
@@ -2073,24 +2274,22 @@ export function AppShell() {
     </div>
     {!settingsTab && (
       <button
-      onClick={() => setRightPanelOpen((v) => !v)}
-      title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-      aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-      style={{
-        position: "fixed", top: 0, right: 0, zIndex: 300,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: isMobile ? 44 : 36, height: isMobile ? 44 : 36, padding: 0,
-        background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
-        color: rightPanelOpen ? "var(--text)" : "var(--text-muted)",
-        cursor: "pointer", transition: "color var(--dur-fast) var(--ease-out-warm)",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.color = rightPanelOpen ? "var(--text)" : "var(--text-muted)"; }}
-    >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" />
-      </svg>
-    </button>
+        type="button"
+        className="shell-toolbar-btn shell-panel-toggle ui-focus-ring"
+        onClick={() => setRightPanelOpen((v) => !v)}
+        aria-expanded={rightPanelOpen}
+        aria-controls="workspace-file-panel"
+        aria-pressed={rightPanelOpen}
+        title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+        aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+        style={{
+          position: "fixed", top: "env(safe-area-inset-top, 0px)", right: "env(safe-area-inset-right, 0px)", zIndex: 300,
+          width: isMobile ? 44 : 36, height: isMobile ? 44 : 36, padding: 0,
+          borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
+        }}
+      >
+        {rightPanelOpen ? <X size={16} strokeWidth={1.8} aria-hidden="true" /> : <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />}
+      </button>
     )}
     <AppUpdateDialog open={appUpdateDialogOpen} update={appUpdate} phase={appUpdatePhase} visibleStage={appUpdateVisibleStage} error={appUpdateError} onProceed={() => void proceedWithAppUpdate()} onNotNow={dismissAppUpdate} />
     {archiveBrowserOpen && (

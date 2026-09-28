@@ -1,4 +1,5 @@
 import packageJson from "../package.json";
+import { isUpdateDisabled } from "./update-policy";
 import { homedir } from "os";
 import { join, normalize, sep } from "path";
 
@@ -10,6 +11,7 @@ export interface NpmUpdateStatus {
   availableVersion: string | null;
   updateAvailable: boolean;
   updateCommand: string;
+  updatesDisabled?: boolean;
 }
 
 let cached: { checkedAt: number; status: NpmUpdateStatus } | null = null;
@@ -34,12 +36,15 @@ export function isNewerVersion(availableVersion: string, currentVersion: string)
 }
 
 export async function checkNpmUpdate(force = false): Promise<NpmUpdateStatus> {
-  if (!force && cached && Date.now() - cached.checkedAt < CHECK_TTL_MS) return cached.status;
-
   const currentVersion = packageJson.version;
   const packageDir = process.env.OMP_WEB_PACKAGE_DIR ?? process.cwd();
   const method = detectInstallMethod(packageDir);
   const updateCommand = method === "bun" ? "bun add -g @kahme247/ompweb" : "npm install -g @kahme247/ompweb";
+
+  if (isUpdateDisabled()) {
+    return { currentVersion, availableVersion: null, updateAvailable: false, updateCommand, updatesDisabled: true };
+  }
+  if (!force && cached && Date.now() - cached.checkedAt < CHECK_TTL_MS) return cached.status;
 
   try {
     const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(NPM_PACKAGE)}/latest`, {

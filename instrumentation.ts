@@ -1,44 +1,7 @@
 export async function register(): Promise<void> {
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
-
-  // Honor HTTP(S)_PROXY/NO_PROXY for server-side fetch (update checks, skill
-  // search, model connection tests). Node's built-in fetch ignores proxy env
-  // vars (NODE_USE_ENV_PROXY is Node 24+ only; engines floor is 22).
-  const { configureHttpDispatcher } = await import("@/lib/http-dispatcher");
-  configureHttpDispatcher();
-
-  // Startup diagnostics: agent dir. Kept to one line so it greps cleanly;
-  // failures here must never block boot.
-  try {
-    const { getAgentDir } = await import("@/lib/session-reader");
-    console.log(
-      `[omp-web] starting (agent-dir ${getAgentDir()})`,
-    );
-  } catch {
-    // Diagnostics are best-effort.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Keep Node-only modules out of the Edge instrumentation bundle.
+    const { register: registerNode } = await import("./instrumentation.node");
+    await registerNode();
   }
-
-  // Warm the shared utility omp process so the first models/auth request does
-  // not pay the multi-second cold spawn (measured 1.2-4s on a real install).
-  // Fire-and-forget: register() must not block boot, and a missing omp binary
-  // is reported per-request by the routes — log once here and move on.
-  // The shared process registers its own SIGINT/SIGTERM/exit disposal hook on
-  // first use (lib/omp/rpc-utility.ts), as the session registry does.
-  void (async () => {
-    try {
-      const { runUtilityCommand } = await import("@/lib/omp/rpc-utility");
-      await runUtilityCommand({ type: "get_state" });
-      const { getOmpVersion } = await import("@/lib/omp/omp-cli");
-      const version = await getOmpVersion();
-      console.log(`[omp-web] omp utility ready (${version ?? "version unknown"})`);
-    } catch (error) {
-      const { resolveOmpBin } = await import("@/lib/omp/omp-cli");
-      const bin = resolveOmpBin();
-      const detail = error instanceof Error ? error.message : String(error);
-      const hint = bin
-        ? `resolved ${bin}; repair with: omp update (or: bun install -g @oh-my-pi/pi-coding-agent@latest)`
-        : "omp binary not found; install oh-my-pi or set OMP_WEB_OMP_BIN";
-      console.warn(`[omp-web] omp utility warm-up failed (routes will retry on demand): ${detail} — ${hint}`);
-    }
-  })();
 }

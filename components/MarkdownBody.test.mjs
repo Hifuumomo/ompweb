@@ -10,6 +10,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const { MarkdownBody } = await jiti.import("./MarkdownBody.tsx");
 const { normalizeDisplayMath, loadMathMarkdownPlugins } = await jiti.import("../lib/markdown.ts");
+const { GithubRepoContext } = await jiti.import("../lib/github-refs.ts");
 
 function renderMarkdown(markdown) {
   return renderToStaticMarkup(
@@ -91,4 +92,30 @@ test("does not normalize escaped delimiters or link destinations", () => {
 
   assert.equal(normalizeDisplayMath(escaped), escaped);
   assert.equal(normalizeDisplayMath(link), link);
+});
+
+function renderWithRepo(markdown, repo) {
+  return renderToStaticMarkup(
+    React.createElement(GithubRepoContext.Provider, { value: repo }, React.createElement(MarkdownBody, null, markdown)),
+  );
+}
+
+test("links bare #N to the session repository and owner/repo#N to its own", () => {
+  const html = renderWithRepo("On PR #3460 (see can1357/oh-my-pi#12130).", "kahme247/ompweb");
+
+  assert.match(html, /<a href="https:\/\/github\.com\/kahme247\/ompweb\/issues\/3460"[^>]*>#3460<\/a>/);
+  assert.match(html, /<a href="https:\/\/github\.com\/can1357\/oh-my-pi\/issues\/12130"[^>]*>can1357\/oh-my-pi#12130<\/a>/);
+});
+
+test("leaves bare #N plain without a repository but still links owner/repo#N", () => {
+  const html = renderWithRepo("#12 and a/b#7", null);
+
+  assert.doesNotMatch(html, /issues\/12/);
+  assert.match(html, /href="https:\/\/github\.com\/a\/b\/issues\/7"/);
+});
+
+test("does not link references in code, existing links, or glued to words and paths", () => {
+  const html = renderWithRepo("`#1` [see #2](https://x.test) C#3 file.ts#4 a/b/c#5 #6x #0 https://x.test/p#7", "o/r");
+
+  assert.doesNotMatch(html, /github\.com/);
 });

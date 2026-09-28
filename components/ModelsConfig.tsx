@@ -132,7 +132,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
       <div style={{ padding: "14px 16px", border: "1px solid var(--border)", borderRadius: "var(--radius-card)", background: "var(--bg-panel)", display: "flex", flexDirection: "column", gap: 10, boxShadow: "var(--shadow-card)" }}>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 220px", minWidth: 0 }}>
-            <div style={{ width: 36, height: 36, borderRadius: "var(--radius-control)", background: "var(--bg-subtle)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: "var(--control-height-lg)", height: "var(--control-height-lg)", borderRadius: "var(--radius-control)", background: "var(--bg-subtle)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <ProviderIcon id={name} size={20} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, overflowWrap: "anywhere" }}>
@@ -367,7 +367,7 @@ function ThinkingEditor({
         const color = LEVEL_COLORS[level];
 
         const btnBase: React.CSSProperties = {
-          padding: "4px 10px",
+          padding: "4px var(--control-padding-inline)",
           fontSize: 10,
           border: "none",
           cursor: "pointer",
@@ -670,7 +670,7 @@ function ModelDetail({
             title={testSummary}
             style={{
               maxWidth: 360,
-              padding: "4px 10px",
+              padding: "4px var(--control-padding-inline)",
               border: `1px solid ${
                 testState.phase === "error"
                   ? "color-mix(in srgb, var(--accent) 30%, transparent)"
@@ -1372,7 +1372,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
               <span style={{ fontSize: 11, color: "var(--text-dim)" }}>·</span>
               <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{tn("modelsConfig.providerCount", Object.keys(runtimeModelsByProvider).length)}</span>
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", cursor: "text" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px var(--control-padding-inline)", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", cursor: "text" }}>
               <Search size={14} aria-hidden="true" style={{ color: "var(--text-dim)", flexShrink: 0 }} />
               <input
                 value={composerPickerSearch}
@@ -1414,7 +1414,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
             <section key={provider.id} style={{ border: "1px dashed var(--border)", borderRadius: "var(--radius-card)", padding: 14, background: "var(--bg-panel)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text)", fontSize: 12, fontWeight: 600 }}><ProviderIcon id={provider.id} size={15} />{provider.name}</div>
               <p style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>{provider.disabled ? t("modelsConfig.connectedDisabledDesc") : t("modelsConfig.connectedNoModelsDesc")}</p>
-              {provider.disabled && <button type="button" onClick={() => void enableConnectedProvider(provider.id).catch((error) => toast.error(t("modelsConfig.couldNotEnableProvider"), error instanceof Error ? error.message : String(error)))} style={{ marginTop: 10, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>{t("modelsConfig.enableInOmp")}</button>}
+              {provider.disabled && <button type="button" onClick={() => void enableConnectedProvider(provider.id).catch((error) => toast.error(t("modelsConfig.couldNotEnableProvider"), error instanceof Error ? error.message : String(error)))} style={{ marginTop: 10, padding: "6px var(--control-padding-inline)", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", color: "var(--text)", cursor: "pointer", fontSize: "var(--text-sm)" }}>{t("modelsConfig.enableInOmp")}</button>}
             </section>
           ))}
         </div>
@@ -1459,7 +1459,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
             <DialogTitle style={{ fontSize: 16, margin: 0 }}>{t("modelsConfig.title")}</DialogTitle>
             <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>~/.omp/agent/models.yml</code>
           </div>
-          <button onClick={onClose} aria-label={t("modelsConfig.close")} title={t("modelsConfig.close")} className="ui-focus-ring" style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "4px 8px", minWidth: 28, minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-control)" }}>×</button>
+          <button onClick={onClose} aria-label={t("modelsConfig.close")} title={t("modelsConfig.close")} className="ui-focus-ring" style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "4px 8px", minWidth: "var(--control-height-sm)", minHeight: "var(--control-height-sm)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-control)" }}>×</button>
         </div>)}
         {!embedded && onSelectTab && <SettingsTabs active="models" onSelect={onSelectTab} />}
 
@@ -1624,11 +1624,11 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                     <ProviderIcon id={p.id} size={28} />
                                     <div>
-                                      <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text)" }}>{p.displayName}</div>
-                                      <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{p.id}</div>
+                                      <div style={{ fontSize: "var(--text-md-strong)", fontWeight: 700, color: "var(--text)" }}>{p.displayName}</div>
+                                      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{p.id}</div>
                                     </div>
                                   </div>
-                                  <span className="settings-badge ok" style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", fontSize: 11 }}>
+                                  <span className="settings-badge ok" style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", fontSize: "var(--text-xs)" }}>
                                     <CheckIcon size={11} aria-hidden="true" /> Key configured
                                   </span>
                                 </div>
@@ -1636,32 +1636,32 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                 {models.length > 0 ? (
                                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 12 }}>
                                     {models.slice(0, 3).map((m) => (
-                                      <span key={m.id} style={{ fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                                      <span key={m.id} style={{ fontSize: "var(--text-xs)", padding: "2px 6px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
                                         {m.name || m.id}
                                       </span>
                                     ))}
                                     {models.length > 3 && (
-                                      <span style={{ fontSize: 10, color: "var(--text-dim)", padding: "2px 4px", alignSelf: "center" }}>
+                                      <span style={{ fontSize: "var(--text-2xs)", color: "var(--text-dim)", padding: "2px 4px", alignSelf: "center" }}>
                                         +{models.length - 3} more
                                       </span>
                                     )}
                                   </div>
                                 ) : (
-                                  <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 10 }}>
+                                  <div style={{ fontSize: "var(--text-body)", color: "var(--text-dim)", marginTop: 10 }}>
                                     System key configured
                                   </div>
                                 )}
                               </div>
 
                               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
-                                <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                                <span style={{ fontSize: "var(--text-body)", color: "var(--text-dim)" }}>
                                   {p.modelCount > 0 ? `${p.modelCount} models` : "Key ready"}
                                 </span>
                                 <button
                                   type="button"
                                   onClick={() => setSelection({ type: "apikey", providerId: p.id })}
                                   className="settings-back"
-                                  style={{ padding: "4px 10px", fontSize: 11.5, border: "1px solid var(--border)", background: "var(--bg)" }}
+                                  style={{ padding: "4px var(--control-padding-inline)", fontSize: "var(--text-body)", border: "1px solid var(--border)", background: "var(--bg)" }}
                                 >
                                   Manage
                                 </button>
@@ -1675,8 +1675,8 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
 
                   {activeOAuth.length === 0 && activeApiKey.length === 0 && (
                     <div className="settings-empty" style={{ textAlign: "center", padding: "32px 20px" }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 6 }}>{t("modelsConfig.noConnectedAccounts")}</div>
-                      <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 16 }}>{t("modelsConfig.addOneBelow")}</div>
+                      <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text)", marginBottom: 6 }}>{t("modelsConfig.noConnectedAccounts")}</div>
+                      <div style={{ fontSize: "var(--text-body)", color: "var(--text-muted)", marginBottom: 16 }}>{t("modelsConfig.addOneBelow")}</div>
                       <button
                         type="button"
                         onClick={() => setPickerOpen(true)}
@@ -1699,13 +1699,13 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                           value={connectSearch}
                           onChange={(e) => setConnectSearch(e.target.value)}
                           placeholder="Search providers to connect..."
-                          style={{ width: "100%", height: 28, padding: "0 24px 0 28px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", fontSize: 12, outline: "none" }}
+                          style={{ width: "100%", height: "var(--control-height-sm)", padding: "0 24px 0 28px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", fontSize: "var(--text-sm)", outline: "none" }}
                         />
                         {connectSearch && (
                           <button
                             type="button"
                             onClick={() => setConnectSearch("")}
-                            style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}
+                            style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "var(--text-sm)" }}
                           >
                             ×
                           </button>
@@ -1732,15 +1732,15 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                 <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                                   <ProviderIcon id={p.id} size={24} />
                                   <div>
-                                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{p.name}</div>
-                                    <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{p.id}</div>
+                                    <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text)" }}>{p.name}</div>
+                                    <div style={{ fontSize: "var(--text-xs)", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{p.id}</div>
                                   </div>
                                 </div>
                                 <button
                                   type="button"
                                   onClick={() => setSelection({ type: "oauth", providerId: p.id })}
                                   className="settings-back"
-                                  style={{ padding: "4px 12px", fontSize: 12, border: "1px solid var(--border)", background: "var(--bg)" }}
+                                  style={{ padding: "4px 12px", fontSize: "var(--text-sm)", border: "1px solid var(--border)", background: "var(--bg)" }}
                                 >
                                   Sign in
                                 </button>
@@ -1753,15 +1753,15 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                 <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                                   <ProviderIcon id={p.id} size={24} />
                                   <div>
-                                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{p.displayName}</div>
-                                    <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>API Key</div>
+                                    <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text)" }}>{p.displayName}</div>
+                                    <div style={{ fontSize: "var(--text-xs)", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>API Key</div>
                                   </div>
                                 </div>
                                 <button
                                   type="button"
                                   onClick={() => setSelection({ type: "apikey", providerId: p.id })}
                                   className="settings-back"
-                                  style={{ padding: "4px 12px", fontSize: 12, border: "1px solid var(--border)", background: "var(--bg)" }}
+                                  style={{ padding: "4px 12px", fontSize: "var(--text-sm)", border: "1px solid var(--border)", background: "var(--bg)" }}
                                 >
                                   Set Key
                                 </button>
@@ -1776,7 +1776,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                               style={{ minHeight: 90, alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer", borderStyle: "dashed", background: "transparent" }}
                             >
                               <Plus size={14} style={{ color: "var(--accent)" }} />
-                              <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-muted)" }}>
+                              <span style={{ fontSize: "var(--text-body)", fontWeight: 500, color: "var(--text-muted)" }}>
                                 Browse all {unlinkedOAuth.length + unconfiguredApiKey.length} providers…
                               </span>
                             </button>
@@ -1807,9 +1807,9 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                 <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
                   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
                     <div style={{ flex: "1 1 220px", minWidth: 0, overflowWrap: "anywhere" }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{t("modelsConfig.customProviders")}</div>
-                      <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 3 }}>
-                        Custom endpoints, local Ollama / vLLM models, or reverse proxies defined in <code style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>~/.omp/agent/models.yml</code>.
+                      <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text)" }}>{t("modelsConfig.customProviders")}</div>
+                      <div style={{ fontSize: "var(--text-body)", color: "var(--text-muted)", marginTop: 3 }}>
+                        Custom endpoints, local Ollama / vLLM models, or reverse proxies defined in <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>~/.omp/agent/models.yml</code>.
                       </div>
                     </div>
                     <button
@@ -1824,8 +1824,8 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
 
                   {providers.length === 0 ? (
                     <div className="settings-empty" style={{ textAlign: "center", padding: "32px 20px" }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 6 }}>{t("modelsConfig.noCustomProviders")}</div>
-                      <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 16 }}>{t("modelsConfig.addOpenAiEndpoint")}</div>
+                      <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text)", marginBottom: 6 }}>{t("modelsConfig.noCustomProviders")}</div>
+                      <div style={{ fontSize: "var(--text-body)", color: "var(--text-muted)", marginBottom: 16 }}>{t("modelsConfig.addOpenAiEndpoint")}</div>
                       <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
                         <button
                           type="button"
@@ -1864,8 +1864,8 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                               <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 220px", minWidth: 0 }}>
                                 <ProviderIcon id={pName} size={22} />
                                 <div style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-                                  <div style={{ fontSize: 13.5, fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--text)" }}>{pName}</div>
-                                  <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{pData.baseUrl || t("modelsConfig.defaultEndpoint")}</div>
+                                  <div style={{ fontSize: "var(--text-md-strong)", fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--text)" }}>{pName}</div>
+                                  <div style={{ fontSize: "var(--text-body)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{pData.baseUrl || t("modelsConfig.defaultEndpoint")}</div>
                                 </div>
                               </div>
                               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
@@ -1873,7 +1873,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                   type="button"
                                   onClick={() => addModel(pName)}
                                   className="settings-back"
-                                  style={{ padding: "4px 8px", fontSize: 11, border: "1px solid var(--border)", background: "var(--bg)" }}
+                                  style={{ padding: "4px 8px", fontSize: "var(--text-xs)", border: "1px solid var(--border)", background: "var(--bg)" }}
                                 >
                                   <Plus size={12} aria-hidden="true" /> Add Model
                                 </button>
@@ -1881,7 +1881,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                   type="button"
                                   onClick={() => setCatalogPicker(pName)}
                                   className="settings-back"
-                                  style={{ padding: "4px 8px", fontSize: 11, border: "1px solid var(--border)", background: "var(--bg)" }}
+                                  style={{ padding: "4px 8px", fontSize: "var(--text-xs)", border: "1px solid var(--border)", background: "var(--bg)" }}
                                 >
                                   <BookOpen size={12} aria-hidden="true" /> Catalog
                                 </button>
@@ -1889,7 +1889,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                   type="button"
                                   onClick={() => setSelection({ type: "provider", name: pName })}
                                   className="settings-back"
-                                  style={{ padding: "4px 8px", fontSize: 11, border: "1px solid var(--border)", background: "var(--bg)" }}
+                                  style={{ padding: "4px 8px", fontSize: "var(--text-xs)", border: "1px solid var(--border)", background: "var(--bg)" }}
                                 >
                                   Edit
                                 </button>
@@ -1897,7 +1897,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
                                   type="button"
                                   onClick={() => deleteProvider(pName)}
                                   className="settings-back"
-                                  style={{ padding: "4px 8px", fontSize: 11, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--status-error)" }}
+                                  style={{ padding: "4px 8px", fontSize: "var(--text-xs)", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--status-error)" }}
                                   title="Delete provider"
                                 >
                                   <Trash2 size={12} aria-hidden="true" />

@@ -121,6 +121,7 @@ export interface AppUpdateInfo {
   updateAvailable: boolean;
   updateCommand?: string;
   selfUpdateSupported?: boolean;
+  updatesDisabled?: boolean;
   selfUpdateStatus?: {
     attemptId: string;
     state: string;

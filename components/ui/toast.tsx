@@ -168,6 +168,7 @@ function Toaster() {
               )}
             </Toast.Content>
             <Toast.Close
+              className="toast-close-button"
               aria-label="Dismiss"
               style={{
                 display: "inline-flex",

@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState, useCallback, useMemo, type RefObject } from "react";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import type { AgentMessage, TextContent } from "@/lib/types";
 
 interface Props {
@@ -144,18 +145,14 @@ export const ChatMinimap = memo(function ChatMinimap({ messages, scrollContainer
   }, [messages]);
 
   // Smoothly scroll to the target message with multi-strategy element resolution
-  const scrollToNode = useCallback((node: NavNode) => {
+  const reducedMotion = usePrefersReducedMotion();
+  const scrollToNode = useCallback((node: NavNode, smooth = true) => {
     const scrollEl = scrollContainer.current;
     if (!scrollEl) return;
-    // 1. Check messageRefs first
     let targetEl = messageRefs.current?.[node.refIndex];
-
-    // 2. Fallback to data-message-index query selector
     if (!targetEl) {
       targetEl = scrollEl.querySelector(`[data-message-index="${node.messageIndex}"]`) as HTMLDivElement | null;
     }
-
-    // 3. Fallback to matching chat message card text
     if (!targetEl && node.text) {
       const cards = scrollEl.querySelectorAll(".chat-message-card");
       const sample = node.text.slice(0, 20);
@@ -167,28 +164,20 @@ export const ChatMinimap = memo(function ChatMinimap({ messages, scrollContainer
       }
     }
 
+    const behavior: ScrollBehavior = smooth && !reducedMotion ? "smooth" : "auto";
     if (targetEl) {
       const containerRect = scrollEl.getBoundingClientRect();
       const elRect = targetEl.getBoundingClientRect();
       const targetScroll = Math.max(0, scrollEl.scrollTop + (elRect.top - containerRect.top) - 16);
-      scrollEl.scrollTop = targetScroll;
-      scrollEl.scrollTo({
-        top: targetScroll,
-        behavior: "smooth",
-      });
+      scrollEl.scrollTo({ top: targetScroll, behavior });
     } else {
-      // 4. Proportional scroll fallback if element is outside rendered window
       const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
       if (maxScroll > 0) {
         const targetScroll = Math.max(0, (node.messageIndex / Math.max(1, messages.length - 1)) * maxScroll);
-        scrollEl.scrollTop = targetScroll;
-        scrollEl.scrollTo({
-          top: targetScroll,
-          behavior: "smooth",
-        });
+        scrollEl.scrollTo({ top: targetScroll, behavior });
       }
     }
-  }, [scrollContainer, messageRefs, messages.length]);
+  }, [scrollContainer, messageRefs, messages.length, reducedMotion]);
 
   const scrollToNodeRef = useRef(scrollToNode);
   scrollToNodeRef.current = scrollToNode;
@@ -269,9 +258,9 @@ export const ChatMinimap = memo(function ChatMinimap({ messages, scrollContainer
   useEffect(() => {
     if (railRef.current && nodes.length > 15) {
       const activeRow = railRef.current.querySelector(`[data-index="${activeIndex}"]`) as HTMLElement | null;
-      activeRow?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      activeRow?.scrollIntoView({ block: "nearest", behavior: reducedMotion ? "auto" : "smooth" });
     }
-  }, [activeIndex, nodes.length]);
+  }, [activeIndex, nodes.length, reducedMotion]);
 
   // Drag scrubber interaction along the vertical rail
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -286,7 +275,7 @@ export const ChatMinimap = memo(function ChatMinimap({ messages, scrollContainer
       const ratio = Math.max(0, Math.min(1, relY / rect.height));
       const targetIdx = Math.min(nodes.length - 1, Math.floor(ratio * nodes.length));
       if (nodes[targetIdx]) {
-        scrollToNodeRef.current(nodes[targetIdx]);
+        scrollToNodeRef.current(nodes[targetIdx], false);
         setActiveIndex(targetIdx);
         setHoveredIndex(targetIdx);
       }

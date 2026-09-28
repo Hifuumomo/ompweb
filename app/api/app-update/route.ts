@@ -50,7 +50,7 @@ export async function GET(request: Request) {
   const force = new URL(request.url).searchParams.get("force") === "1";
   const status = await checkNpmUpdate(force);
   const support = getSelfUpdateSupport();
-  const selfUpdateStatus = getSelfUpdateStatus();
+  const selfUpdateStatus = status.updatesDisabled ? null : getSelfUpdateStatus();
   return NextResponse.json({
     ...status,
     selfUpdateSupported: support.supported,

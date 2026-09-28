@@ -1,10 +1,11 @@
 "use client";
 
-import { Children, cloneElement, isValidElement, useMemo, type ComponentProps, type MouseEvent, type ReactElement, type ReactNode } from "react";
+import { Children, cloneElement, isValidElement, useContext, useMemo, type ComponentProps, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { resolveLocalFileHref } from "@/lib/file-links";
 import { encodeFilePathForApi } from "@/lib/file-paths";
-import { normalizeDisplayMath, useMarkdownPlugins } from "../lib/markdown";
+import { GithubRepoContext, remarkGithubRefs } from "../lib/github-refs";
+import { normalizeDisplayMath, useMarkdownPlugins, type MarkdownPlugins } from "../lib/markdown";
 import { markdownCodeRenderer } from "./MarkdownCode";
 import { ClickableImage } from "./ImageLightbox";
 
@@ -19,7 +20,12 @@ interface MarkdownBodyProps {
 
 export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile, suppressImages = false }: MarkdownBodyProps) {
   const normalizedMarkdown = useMemo(() => normalizeDisplayMath(children), [children]);
-  const { remarkPlugins, rehypePlugins } = useMarkdownPlugins(normalizedMarkdown);
+  const { remarkPlugins: baseRemarkPlugins, rehypePlugins } = useMarkdownPlugins(normalizedMarkdown);
+  const githubRepo = useContext(GithubRepoContext);
+  const remarkPlugins = useMemo<MarkdownPlugins["remarkPlugins"]>(
+    () => [...baseRemarkPlugins, [remarkGithubRefs, { repo: githubRepo }]],
+    [baseRemarkPlugins, githubRepo],
+  );
 
   // Rebuilt only when its captured props change, not on every render.
   const components = useMemo<Components>(() => {

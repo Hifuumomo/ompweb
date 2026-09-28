@@ -76,6 +76,7 @@ ompweb --no-open                           # 不自动打开浏览器
 | `OMP_WEB_HOSTNAME` | 绑定主机名 | `127.0.0.1` |
 | `OMP_WEB_PASSWORD` | 可选的 Web 访问密码 | _无（未启用验证）_ |
 | `OMP_WEB_NO_OPEN` | 设为 `1` 时禁止自动打开浏览器 | `0` |
+| `OMP_WEB_DISABLE_AUTOUPDATE` | 设为 `1` 时禁用更新检查和应用内更新；修改后需重启 | `0` |
 | `OMP_WEB_OMP_BIN` | `omp` 二进制路径（未在 PATH 时使用） | _自动检测_ |
 | `PI_CODING_AGENT_DIR` | 自定义 omp agent 目录 | `~/.omp/agent` |
 | `OMP_WEB_STT_ENDPOINT` | OpenAI 兼容的语音转文字接口 URL | _无（默认禁用）_ |

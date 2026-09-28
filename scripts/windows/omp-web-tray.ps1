@@ -212,21 +212,34 @@ function Start-WebServer {
     Update-TrayUI
     Write-ServiceLog "Starting web server in $EffectiveMode mode on $EffectiveHostname`:$EffectivePort..."
 
+    # Child output goes straight to a file through cmd. Redirecting it with
+    # RedirectStandardOutput + add_OutputDataReceived looks equivalent, but those
+    # callbacks run on a thread-pool thread with no runspace: invoking a script
+    # block there terminates this host process, so the supervisor dies as soon as
+    # the child prints its first line and leaves an unsupervised server holding
+    # the port (no tray icon, no auto-restart, mutex already released).
+    $childOutLog = Join-Path $LogDir "omp-web-server.log"
+    if ((Test-Path $childOutLog) -and ((Get-Item $childOutLog).Length -gt 5MB)) {
+        Move-Item -Path $childOutLog -Destination "$childOutLog.old" -Force -ErrorAction SilentlyContinue
+    }
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $NodeExe
     $psi.WorkingDirectory = $RepoRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $false
+    $psi.RedirectStandardError = $false
 
     if ($EffectiveMode -eq "start") {
         $launcherJs = Join-Path $RepoRoot "bin\omp-web.js"
-        $psi.Arguments = "`"$launcherJs`" -p $EffectivePort -H $EffectiveHostname --no-open"
+        $inner = "`"$NodeExe`" `"$launcherJs`" -p $EffectivePort -H $EffectiveHostname --no-open"
     } else {
         $nextBin = Join-Path $RepoRoot "node_modules\next\dist\bin\next"
-        $psi.Arguments = "`"$nextBin`" dev -H $EffectiveHostname -p $EffectivePort"
+        $inner = "`"$NodeExe`" `"$nextBin`" dev -H $EffectiveHostname -p $EffectivePort"
     }
+    $psi.FileName = $env:ComSpec
+    $psi.Arguments = "/d /s /c `"$inner >> `"$childOutLog`" 2>&1`""
 
     # Environment variables
     $psi.EnvironmentVariables["OMP_WEB_PORT"] = [string]$EffectivePort
@@ -234,31 +247,28 @@ function Start-WebServer {
     $psi.EnvironmentVariables["OMP_WEB_SERVICE"] = "1"
     $psi.EnvironmentVariables["PORT"] = [string]$EffectivePort
 
+    # bin/omp-web.js refuses a non-loopback bind without OMP_WEB_PASSWORD, so do not
+    # rely on inheritance alone: a logon-time environment block can be stale (e.g.
+    # after `setx OMP_WEB_PASSWORD`), and the child would then crash-loop on start.
+    $childPassword = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD", "Process")
+    if ([string]::IsNullOrEmpty($childPassword)) {
+        $childPassword = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD", "User")
+    }
+    if (![string]::IsNullOrEmpty($childPassword)) {
+        $psi.EnvironmentVariables["OMP_WEB_PASSWORD"] = $childPassword
+    } else {
+        Write-ServiceLog "WARN: OMP_WEB_PASSWORD not found in the process or user environment; a non-loopback bind will be refused by bin/omp-web.js"
+    }
+
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
     $proc.EnableRaisingEvents = $true
 
-    # Asynchronous output logging
-    $proc.add_OutputDataReceived({
-        param($sender, $e)
-        if (![string]::IsNullOrEmpty($e.Data)) {
-            Write-ServiceLog "[STDOUT] $($e.Data)"
-        }
-    })
-    $proc.add_ErrorDataReceived({
-        param($sender, $e)
-        if (![string]::IsNullOrEmpty($e.Data)) {
-            Write-ServiceLog "[STDERR] $($e.Data)"
-        }
-    })
-
     try {
         $started = $proc.Start()
         if ($started) {
-            $proc.BeginOutputReadLine()
-            $proc.BeginErrorReadLine()
             $script:ChildProcess = $proc
-            Write-ServiceLog "Child server process started with PID $($proc.Id)"
+            Write-ServiceLog "Child server process started with PID $($proc.Id) (output -> $childOutLog)"
         } else {
             $script:State = "Error"
             Write-ServiceLog "Failed to start child server process."

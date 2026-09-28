@@ -230,7 +230,7 @@ function inputShellStyle({ invalid }: InputShellStyleOptions): CSSProperties {
   return {
     padding: "6px 9px",
     background: "var(--bg)",
-    border: `1px solid ${invalid ? "var(--accent)" : "var(--border)"}`,
+    border: `1px solid ${invalid ? "var(--status-error)" : "var(--border)"}`,
     borderRadius: "var(--radius-control)",
     color: "var(--text)",
     fontSize: 12,
@@ -245,8 +245,10 @@ function inputShellStyle({ invalid }: InputShellStyleOptions): CSSProperties {
 function focusGlowStyle(focused: boolean, invalid: boolean): CSSProperties {
   if (!focused) return {};
   return {
-    borderColor: invalid ? "var(--accent)" : "var(--accent)",
-    boxShadow: "var(--focus-ring)",
+    borderColor: invalid ? "var(--status-error)" : "var(--accent)",
+    boxShadow: invalid
+      ? "0 0 0 2px color-mix(in srgb, var(--status-error) 28%, transparent)"
+      : "0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent)",
   };
 }
 
@@ -609,14 +611,18 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         ariaLabel={typeof title === "string" ? title : undefined}
-        style={{ width: 420, maxWidth: "min(92vw, 420px)", padding: 22 }}
+        style={{ width: 420, maxWidth: "min(92vw, 420px)", padding: 22, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
         <DialogTitle>{title}</DialogTitle>
         <div style={{ height: 8 }} />
         {description && (
           <p
             style={{
-              margin: "0 0 18px",
+              flex: "1 1 auto",
+              minHeight: 0,
+              overflowY: "auto",
+              whiteSpace: "pre-wrap",
+              margin: "0 0 12px",
               fontSize: 13,
               lineHeight: 1.55,
               color: "var(--text-muted)",
@@ -625,9 +631,10 @@ export function ConfirmDialog({
             {description}
           </p>
         )}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <div className="dialog-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexShrink: 0, paddingTop: 4 }}>
           <button
             type="button"
+            className="dialog-action"
             onClick={() => onOpenChange(false)}
             style={{
               padding: "6px 14px",
@@ -643,11 +650,12 @@ export function ConfirmDialog({
           </button>
           <button
             type="button"
+            className="dialog-action"
             disabled={busy}
             onClick={onConfirm}
             style={{
               padding: "6px 14px",
-              background: "var(--accent-strong)",
+              background: danger ? "var(--status-error)" : "var(--accent-strong)",
               border: "none",
               borderRadius: "var(--radius-control)",
               color: "var(--on-accent)",
@@ -658,13 +666,10 @@ export function ConfirmDialog({
               transition: "background var(--dur-fast) var(--ease-out-warm)",
             }}
             onMouseEnter={(e) => {
-              if (!busy) e.currentTarget.style.background = "var(--accent-hover)";
+              if (!busy) e.currentTarget.style.background = danger ? "color-mix(in srgb, var(--status-error) 82%, black)" : "var(--accent-hover)";
             }}
             onMouseLeave={(e) => {
-              if (!busy)
-                e.currentTarget.style.background = danger
-                  ? "var(--accent-strong)"
-                  : "var(--accent)";
+              if (!busy) e.currentTarget.style.background = danger ? "var(--status-error)" : "var(--accent-strong)";
             }}
           >
             {confirmLabel}

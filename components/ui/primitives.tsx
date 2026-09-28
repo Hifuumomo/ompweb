@@ -58,7 +58,7 @@ export function DialogContent({ children, className, style, ariaLabel }: {
           boxShadow: "var(--shadow-modal)",
           padding: 20,
           maxWidth: "min(92vw, 560px)",
-          maxHeight: "85dvh",
+          maxHeight: "calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom))",
           overflow: "auto",
           ...style,
         }}

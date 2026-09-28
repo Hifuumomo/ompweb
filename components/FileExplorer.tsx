@@ -18,6 +18,7 @@ import {
 import { getFileIcon } from "./FileIcons";
 import { Tooltip } from "./ui/primitives";
 import { translate, useI18n } from "@/lib/i18n";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   encodeFilePathForApi,
   getFileDirectory,
@@ -208,10 +209,8 @@ function DismissButton({ onClick, title }: { onClick: () => void; title: string 
   );
 }
 
-// Fixed row geometry: every tree row is exactly this tall, so the visible
-// window is pure arithmetic (no measuring). The empty-directory placeholder
-// shares the height — a second geometry would break the scroll math.
-const ROW_HEIGHT = 24;
+// Desktop keeps the compact tree density; mobile uses 44px rows so the
+// primary file navigation remains comfortable to tap.
 const OVERSCAN_ROWS = 8;
 
 type FlatRow =
@@ -244,6 +243,7 @@ function flattenVisibleRows(
 interface ExplorerRowProps {
   row: FlatRow;
   index: number;
+  rowHeight: number;
   rowCount: number;
   cwd: string;
   open: boolean;
@@ -266,6 +266,7 @@ const ExplorerRow = memo(function ExplorerRow({
   row,
   index,
   rowCount,
+  rowHeight,
   cwd,
   open,
   loading,
@@ -285,7 +286,7 @@ const ExplorerRow = memo(function ExplorerRow({
   if (row.kind === "empty") {
     return (
       <div
-        style={{ paddingLeft: 8 + row.depth * 14, fontSize: 11, color: "var(--text-dim)", height: ROW_HEIGHT, display: "flex", alignItems: "center" }}
+        style={{ paddingLeft: 8 + row.depth * 14, fontSize: 11, color: "var(--text-dim)", height: rowHeight, display: "flex", alignItems: "center" }}
       >
         {t("fileExplorer.emptyDir")}
       </div>
@@ -324,13 +325,12 @@ const ExplorerRow = memo(function ExplorerRow({
         ? (node.name + " (folder" + (open ? ", expanded" : ", collapsed") + ")")
         : (secondaryLabel ? (node.name + " (file, " + secondaryLabel + ")") : (node.name + " (file)"))}
       style={{
-        position: "relative",
         display: "flex",
         alignItems: "center",
         gap: 4,
         paddingLeft: 8 + row.depth * 14,
         paddingRight: 8,
-        height: ROW_HEIGHT,
+        height: rowHeight,
         cursor: "pointer",
         background: isActiveFile ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
         borderRadius: "var(--radius-control)",
@@ -368,9 +368,8 @@ const ExplorerRow = memo(function ExplorerRow({
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
-          // The name is the answer the user is looking for, so the directory
-          // gives up width first.
-          flex: secondaryLabel ? "0 0 auto" : 1,
+          // Prefer the name, but let it shrink to keep row actions reachable.
+          flex: secondaryLabel ? "0 1 auto" : 1,
           maxWidth: secondaryLabel ? "72%" : undefined,
         }}
         title={node.fullPath}
@@ -403,7 +402,7 @@ const ExplorerRow = memo(function ExplorerRow({
           style={{ width: 6, height: 6, flexShrink: 0, borderRadius: "50%", background: "var(--accent)" }}
         />
       )}
-      {!hovered && !node.isDir && gitStatus && (
+      {!node.isDir && gitStatus && (
         <span
           title={t(GIT_STATUS_LABEL_KEYS[gitStatus.status])}
           aria-label={t(GIT_STATUS_LABEL_KEYS[gitStatus.status])}
@@ -420,7 +419,7 @@ const ExplorerRow = memo(function ExplorerRow({
           {gitStatus.code}
         </span>
       )}
-      {!hovered && containsGitChanges && (
+      {containsGitChanges && (
         <span
           title={t("fileExplorer.containsChangedFiles")}
           aria-label={t("fileExplorer.containsChangedFiles")}
@@ -436,7 +435,7 @@ const ExplorerRow = memo(function ExplorerRow({
       {loading && (
         <Loader2 size={10} strokeWidth={2} color="var(--text-dim)" style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }} aria-hidden="true" />
       )}
-      {onAtMention && hovered && (
+      {onAtMention && (
         <Tooltip content={mentionLabel}>
           <button
             onClick={(e) => {
@@ -445,16 +444,13 @@ const ExplorerRow = memo(function ExplorerRow({
             }}
             aria-label={mentionLabel}
             style={{
-              position: "absolute",
-              right: !node.isDir ? 28 : 4,
-              top: "50%",
-              transform: "translateY(-50%)",
+              flexShrink: 0,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 4,
               padding: "0 8px",
-              height: 20,
+              minWidth: 24, height: 24,
               background: "var(--bg-panel)",
               border: "1px solid var(--border)",
               borderRadius: "var(--radius-control)",
@@ -471,7 +467,7 @@ const ExplorerRow = memo(function ExplorerRow({
           </button>
         </Tooltip>
       )}
-      {hovered && !node.isDir && (
+      {!node.isDir && (
         <Tooltip content={downloadLabel}>
           <a
             href={`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`}
@@ -479,16 +475,13 @@ const ExplorerRow = memo(function ExplorerRow({
             onClick={(e) => e.stopPropagation()}
             aria-label={downloadLabel}
             style={{
-              position: "absolute",
-              right: 4,
-              top: "50%",
-              transform: "translateY(-50%)",
+              flexShrink: 0,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 4,
               padding: "0 5px",
-              height: 20,
+              minWidth: 24, height: 24,
               background: "var(--bg-panel)",
               border: "1px solid var(--border)",
               borderRadius: "var(--radius-control)",
@@ -525,6 +518,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onGitStatusChange,
 }, ref) {
   const { t, tn } = useI18n();
+  const isMobile = useIsMobile();
+  const rowHeight = isMobile ? 44 : 24;
   // Directory listings keyed by absolute path. The tree renders from a flat
   // projection of this map, so 30k visible rows cost one array walk — never
   // 30k mounted components.
@@ -673,11 +668,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   focusedIndexRef.current = focusedIndex;
 
   const normalizedActiveFilePath = activeFilePath ? normalizeFilePathSlashes(activeFilePath) : null;
-  const totalListHeight = rows.length * ROW_HEIGHT;
-  const windowStart = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
+  const totalListHeight = rows.length * rowHeight;
+  const windowStart = Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN_ROWS);
   const windowEnd = Math.min(
     rows.length,
-    Math.ceil((scrollTop + (viewportHeight || ROW_HEIGHT)) / ROW_HEIGHT) + OVERSCAN_ROWS,
+    Math.ceil((scrollTop + (viewportHeight || rowHeight)) / rowHeight) + OVERSCAN_ROWS,
   );
 
   const gitStatusByPath = useMemo(() => new Map(
@@ -745,8 +740,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setFocusedIndex(index);
     const container = scrollRef.current;
     if (container) {
-      const top = index * ROW_HEIGHT;
-      const bottom = top + ROW_HEIGHT;
+      const top = index * rowHeight;
+      const bottom = top + rowHeight;
       const nextTop = top < container.scrollTop
         ? top
         : bottom > container.scrollTop + container.clientHeight
@@ -766,7 +761,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       if (triesLeft > 0) requestAnimationFrame(() => attemptFocus(triesLeft - 1));
     };
     requestAnimationFrame(() => attemptFocus(5));
-  }, []);
+  }, [rowHeight]);
 
   const handleActivateRow = useCallback((node: FileNode, index: number) => {
     setFocusedIndex(index);
@@ -1112,11 +1107,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
             return (
               <div
                 key={`empty:${row.key}`}
-                style={{ position: "absolute", top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT }}
+                style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: rowHeight }}
               >
                 <ExplorerRow
                   row={row}
                   index={index}
+                  rowHeight={rowHeight}
                   rowCount={rows.length}
                   cwd={cwd}
                   open={false}
@@ -1138,11 +1134,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           return (
             <div
               key={node.fullPath}
-              style={{ position: "absolute", top: index * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT }}
+              style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: rowHeight }}
             >
               <ExplorerRow
                 row={row}
                 index={index}
+                rowHeight={rowHeight}
                 rowCount={rows.length}
                 cwd={cwd}
                 open={node.isDir && expandedPaths.has(node.fullPath)}
@@ -1176,6 +1173,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           padding: "6px 8px 4px",
         }}>
           <input
+            className="file-explorer-search-input"
             ref={searchInputRef}
             value={searchQuery}
             onChange={(e) => {
@@ -1210,6 +1208,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           />
           {searchQuery && (
             <button
+              className="file-explorer-search-clear"
               type="button"
               onClick={() => {
                 setSearchQuery("");
@@ -1357,6 +1356,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
         ref={scrollRef}
         role="tree"
         aria-label={t("sessionSidebar.explorer")}
+        aria-busy={loading || searchLoading}
         onScroll={handleTreeScroll}
         style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "2px 4px", outline: "none" }}
       >
@@ -1364,16 +1364,36 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           searchLoading ? (
             <div role="status" style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.searching")}</div>
           ) : searchFailed ? (
-            <div role="alert" style={{ padding: "8px 12px", fontSize: 11, color: "var(--status-error)" }}>{t("fileExplorer.searchFailed")}</div>
+            <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", fontSize: 11, color: "var(--status-error)" }}>
+              <span>{t("fileExplorer.searchFailed")}</span>
+              <button
+                className="load-retry-button"
+                type="button"
+                onClick={() => setTreeRefreshKey((key) => key + 1)}
+                style={{ minHeight: 32, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+              >
+                {t("chatWindow.retry")}
+              </button>
+            </div>
           ) : rows.length === 0 ? (
             <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.noMatchingFiles")}</div>
           ) : (
             treeRows
           )
         ) : loading ? (
-          <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.loadingFiles")}</div>
+          <div role="status" aria-live="polite" style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.loadingFiles")}</div>
         ) : error ? (
-          <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--status-error)" }}>{error}</div>
+          <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", fontSize: 11, color: "var(--status-error)" }}>
+            <span>{error}</span>
+            <button
+              className="load-retry-button"
+              type="button"
+              onClick={() => setTreeRefreshKey((key) => key + 1)}
+              style={{ minHeight: 32, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+            >
+              {t("chatWindow.retry")}
+            </button>
+          </div>
         ) : rows.length === 0 ? (
           <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
             {t("fileExplorer.noFilesFound")}

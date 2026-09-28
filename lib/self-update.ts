@@ -18,6 +18,7 @@ import { tmpdir } from "os";
 import { dirname, join, posix, resolve, win32 } from "path";
 import { checkNpmUpdate, detectInstallMethod } from "./npm-update";
 import { checkOmpUpdate } from "./omp/updates";
+import { DISABLE_AUTOUPDATE_ENV_VAR, isUpdateDisabled } from "./update-policy";
 
 const LEASE_MS = 30 * 60 * 1000;
 const TERMINAL_STATUS_TTL_MS = 24 * 60 * 60 * 1000;
@@ -53,6 +54,11 @@ export class SelfUpdateError extends Error {
 }
 
 type Kind = "app" | "omp";
+
+function assertUpdatesEnabled(): void {
+  if (!isUpdateDisabled()) return;
+  throw new SelfUpdateError("updates_disabled", `Updates are disabled by ${DISABLE_AUTOUPDATE_ENV_VAR}`, 403);
+}
 
 export function resolveSelfUpdateTempRoot(
   kind: Kind = "app",
@@ -275,6 +281,9 @@ export function getSelfUpdateStatus(kind: Kind = "app"): SelfUpdateStatus | null
 }
 export function getSelfUpdateSupport(): { supported: boolean; reason?: string; packageDir: string } {
   const packageDir = process.env.OMP_WEB_PACKAGE_DIR ?? resolve(join(import.meta ? dirname(new URL(import.meta.url).pathname) : process.cwd(), ".."));
+  if (isUpdateDisabled()) {
+    return { supported: false, reason: `Updates are disabled by ${DISABLE_AUTOUPDATE_ENV_VAR}`, packageDir };
+  }
   // simplified: always supported if packageDir exists
   try {
     if (!existsSync(packageDir)) return { supported: false, reason: "package dir not found", packageDir };
@@ -291,6 +300,7 @@ function detectManager(packageDir: string): { manager: "npm" | "bun"; managerPat
 }
 
 export async function prepareSelfUpdate(kind: Kind = "app"): Promise<PrepareResult> {
+  assertUpdatesEnabled();
   cleanupStaleSelfUpdate(Date.now(), kind);
   ensureSecureRoot(kind, true);
   const leaseFile = leasePath(kind);
@@ -353,6 +363,7 @@ export async function prepareSelfUpdate(kind: Kind = "app"): Promise<PrepareResu
 }
 
 export function validateCommitSelfUpdate(attemptId: string, kind: Kind = "app"): "ready" | "replay" {
+  assertUpdatesEnabled();
   const status = readStateJson<StoredStatus>(statusPath(kind));
   if (!status || status.attemptId !== attemptId) throw new SelfUpdateError("attempt_not_found", "Update attempt not found", 404);
   if (status.state === "running") return "replay";
@@ -377,6 +388,7 @@ export async function armSelfUpdateLauncher(attemptId: string, kind: Kind = "app
 }
 
 export function commitSelfUpdate(attemptId: string, kind: Kind = "app"): { accepted: true; attemptId: string } {
+  assertUpdatesEnabled();
   const status = readStateJson<StoredStatus>(statusPath(kind));
   if (!status || status.attemptId !== attemptId) throw new SelfUpdateError("attempt_not_found", "Update attempt not found", 404);
   // write go marker

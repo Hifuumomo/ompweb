@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Geist, JetBrains_Mono, Noto_Sans_Mono, Noto_Serif_SC, Source_Serif_4 } from "next/font/google";
 import { ThemeColor } from "@/hooks/useTheme";
+import { IosFocusZoomGuard } from "@/components/IosFocusZoomGuard";
 import { SIDEBAR_HISTORY_BRIDGE_SCRIPT } from "@/lib/sidebar-history-bridge";
 import "./globals.css";
 
@@ -105,6 +106,7 @@ export default function RootLayout({
         />
       </head>
       <body translate="no" className="notranslate" style={{ height: "100%", maxHeight: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <IosFocusZoomGuard />
         {children}
       </body>
     </html>

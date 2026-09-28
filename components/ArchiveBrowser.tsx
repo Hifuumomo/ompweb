@@ -455,11 +455,13 @@ export function ArchiveBrowser({ open, onClose, onRestored }: ArchiveBrowserProp
               aria-hidden="true"
             />
             <input
+              className="archive-search-input"
               ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t("archiveBrowser.searchPlaceholder")}
+              aria-label={t("archiveBrowser.searchPlaceholder")}
               style={{
                 width: "100%",
                 height: 34,
@@ -472,13 +474,13 @@ export function ArchiveBrowser({ open, onClose, onRestored }: ArchiveBrowserProp
                 outline: "none",
                 transition: "border-color var(--dur-fast)",
               }}
-              className="ui-focus-ring"
             />
             {searchQuery && (
               <button
+                className="archive-search-clear"
                 type="button"
                 onClick={() => setSearchQuery("")}
-                aria-label={t("archiveBrowser.close")}
+                aria-label={t("fileExplorer.clearSearch")}
                 style={{
                   position: "absolute",
                   right: 8,

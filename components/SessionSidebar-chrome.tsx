@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { createPortal } from "react-dom";
 import { useI18n } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+import { AlertTriangle } from "lucide-react";
 import OmpWebLogo from "./OmpWebLogo";
 /**
  * Path label that ellipsizes on the LEFT, keeping the (most relevant) trailing
@@ -55,6 +56,7 @@ function SidebarIconButton({
   return (
     <button
       type="button"
+      className="sidebar-icon-button"
       aria-label={label}
       title={title ?? label}
       onClick={onClick}
@@ -112,6 +114,14 @@ function SidebarPortalMenu({
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const closeAndRestore = useCallback(() => {
+    onClose();
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && !menuRef.current?.contains(active)) return;
+      anchor.current?.focus();
+    });
+  }, [anchor, onClose]);
 
   // Refs are passed as arguments so the callback stays dependency-clean
   // (no ref.current access inside) for the React Compiler.
@@ -186,9 +196,10 @@ function SidebarPortalMenu({
       if (e.key === "Escape") {
         e.stopPropagation();
         e.preventDefault();
-        onClose();
-        anchor.current?.focus();
-      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        closeAndRestore();
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? []);
         if (buttons.length === 0) return;
@@ -208,13 +219,19 @@ function SidebarPortalMenu({
       document.removeEventListener("touchstart", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, onClose, anchor]);
+  }, [open, onClose, anchor, closeAndRestore]);
 
   if (!open || typeof document === "undefined") return null;
 
   return createPortal(
     <div
       ref={menuRef}
+      // Bubble phase, not capture: closing in capture flushes the unmount
+      // before the item's own onClick runs, and React then drops that click.
+      onClick={(event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest('[role="menuitem"]')) closeAndRestore();
+      }}
       role="menu"
       style={{
         position: "fixed",
@@ -367,6 +384,26 @@ function RunningSessionIndicator({ size = 14 }: { size?: number }) {
     </span>
   );
 }
+function ExitedSessionIndicator({ title, size = 14 }: { title: string; size?: number }) {
+  return (
+    <span
+      title={title}
+      aria-label={title}
+      style={{
+        width: size,
+        height: size,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "var(--status-error)",
+      }}
+    >
+      <AlertTriangle size={size} strokeWidth={2.2} aria-hidden="true" />
+    </span>
+  );
+}
+
 function UnreadSessionIndicator({ size = 14 }: { size?: number }) {
   const { t } = useI18n();
   const reducedMotion = usePrefersReducedMotion();
@@ -399,6 +436,7 @@ function UnreadSessionIndicator({ size = 14 }: { size?: number }) {
 export {
   OmpWebTitle,
   PathLabel,
+  ExitedSessionIndicator,
   RunningSessionIndicator,
   SIDEBAR_BUTTON_TRANSITION,
   SidebarIconButton,

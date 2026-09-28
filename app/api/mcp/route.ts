@@ -80,13 +80,14 @@ export async function GET(request: Request) {
       }),
     };
     const sessionId = params.get("sessionId");
+    const includeLive = params.get("live") !== "0";
     // Advisor opinion for a fresh spawn only (same ?advisor=1 convention as
     // /api/agent/[id]): an alive child is reused as-is below, never replaced —
     // listing servers must stay side-effect-free.
     const advisor = params.get("advisor") === "1";
     let liveServers: ReturnType<typeof parseMcpListOutput> | undefined;
     let liveError: string | undefined;
-    if (sessionId) {
+    if (includeLive && sessionId) {
       try {
         let session = getRpcSession(sessionId);
         if (!session?.isAlive()) {

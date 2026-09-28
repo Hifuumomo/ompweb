@@ -99,36 +99,52 @@ function Test-ServerHealth {
 function Start-WebServer {
     if ($script:ChildProcess -and !$script:ChildProcess.HasExited) { return }
     Write-ServiceLog "Starting web server in $EffectiveMode mode on ${EffectiveHostname}:$EffectivePort..."
+    # Child output goes to a file through cmd; the async OutputDataReceived
+    # callbacks run on a thread-pool thread with no runspace and terminate this
+    # supervisor the moment the child prints anything (see the tray script).
+    $childOutLog = Join-Path $LogDir "omp-web-server.log"
+    if ((Test-Path $childOutLog) -and ((Get-Item $childOutLog).Length -gt 5MB)) {
+        Move-Item -Path $childOutLog -Destination "$childOutLog.old" -Force -ErrorAction SilentlyContinue
+    }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $NodeExe
     $psi.WorkingDirectory = $RepoRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $false
+    $psi.RedirectStandardError = $false
     if ($EffectiveMode -eq "start") {
         $launcherJs = Join-Path $RepoRoot "bin\omp-web.js"
-        $psi.Arguments = "`"$launcherJs`" -p $EffectivePort -H $EffectiveHostname --no-open"
+        $inner = "`"$NodeExe`" `"$launcherJs`" -p $EffectivePort -H $EffectiveHostname --no-open"
     } else {
         $nextBin = Join-Path $RepoRoot "node_modules\next\dist\bin\next"
-        $psi.Arguments = "`"$nextBin`" dev -H $EffectiveHostname -p $EffectivePort"
+        $inner = "`"$NodeExe`" `"$nextBin`" dev -H $EffectiveHostname -p $EffectivePort"
     }
+    $psi.FileName = $env:ComSpec
+    $psi.Arguments = "/d /s /c `"$inner >> `"$childOutLog`" 2>&1`""
     $psi.EnvironmentVariables["OMP_WEB_PORT"] = [string]$EffectivePort
     $psi.EnvironmentVariables["OMP_WEB_HOSTNAME"] = [string]$EffectiveHostname
     $psi.EnvironmentVariables["OMP_WEB_SERVICE"] = "1"
     $psi.EnvironmentVariables["PORT"] = [string]$EffectivePort
+    # Pass the password explicitly: bin/omp-web.js refuses a non-loopback bind
+    # without it, and an inherited environment block can be stale.
+    $childPassword = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD", "Process")
+    if ([string]::IsNullOrEmpty($childPassword)) {
+        $childPassword = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD", "User")
+    }
+    if (![string]::IsNullOrEmpty($childPassword)) {
+        $psi.EnvironmentVariables["OMP_WEB_PASSWORD"] = $childPassword
+    } else {
+        Write-ServiceLog "WARN: OMP_WEB_PASSWORD not found in the process or user environment; a non-loopback bind will be refused by bin/omp-web.js"
+    }
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
     $proc.EnableRaisingEvents = $true
-    $proc.add_OutputDataReceived({ param($sender,$e) if (![string]::IsNullOrEmpty($e.Data)) { Write-ServiceLog "[STDOUT] $($e.Data)" } })
-    $proc.add_ErrorDataReceived({ param($sender,$e) if (![string]::IsNullOrEmpty($e.Data)) { Write-ServiceLog "[STDERR] $($e.Data)" } })
     try {
         $started = $proc.Start()
         if ($started) {
-            $proc.BeginOutputReadLine()
-            $proc.BeginErrorReadLine()
             $script:ChildProcess = $proc
-            Write-ServiceLog "Child server process started with PID $($proc.Id)"
+            Write-ServiceLog "Child server process started with PID $($proc.Id) (output -> $childOutLog)"
         } else {
             Write-ServiceLog "Failed to start child server process."
         }
@@ -151,8 +167,10 @@ function Stop-WebServer {
     Write-ServiceLog "Server stopped."
 }
 
-# Handle Ctrl-C / termination
-[Console]::TreatControlCAsInput = $false
+# Handle Ctrl-C / termination. Guarded: launched from a hidden window or Task
+# Scheduler there is no console, and touching it throws, which would kill the
+# supervisor before the health-monitor loop ever starts.
+try { [Console]::TreatControlCAsInput = $false } catch { }
 $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { $script:IsExiting = $true; Stop-WebServer } -ErrorAction SilentlyContinue
 
 # Trap termination signals

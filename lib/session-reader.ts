@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync, statSync, type Stats } from "fs";
 import { normalize as normalizePath } from "path";
 import { getAgentDir } from "./omp/paths";
 import {
@@ -29,6 +29,7 @@ import { taskResultRetryFailure, taskResultStructuredOutput, taskResultUsageCost
 import type { TodoPhase } from "./pi-types";
 import { projectIdentityKey, sessionPathKey } from "./paths";
 import { resolveProject, type ProjectInfo } from "./worktree";
+import { selectHistoryRange, type SessionHistoryCursor, type SessionHistoryPage } from "./session-sync";
 
 export { getAgentDir };
 
@@ -111,10 +112,13 @@ export async function listAllSessions(): Promise<SessionInfo[]> {
     return globalThis.__piSessionListPromise;
   }
 
+  // Flipped once the watchdog below retires this scan: a hung load that
+  // resolves after the slot moved on must not overwrite fresher cache data.
+  let retired = false;
   const loadPromise = loadAllSessions().then((data) => {
     // An invalidation may happen while the scan is in flight. Do not let that
     // older result repopulate the cache after a session mutation.
-    if ((globalThis.__piSessionListGeneration ?? 0) === generation) {
+    if ((globalThis.__piSessionListGeneration ?? 0) === generation && !retired) {
       globalThis.__piSessionListCache = { data, ts: Date.now() };
     }
     return data;
@@ -125,6 +129,23 @@ export async function listAllSessions(): Promise<SessionInfo[]> {
       globalThis.__piSessionListPromiseGeneration = undefined;
     }
   });
+  // A load that never settles (a stuck sync syscall, a hung git spawn that
+  // slipped past its timeout) must not be handed to every future caller
+  // forever — the coalescing slot would pin the wedge until process restart.
+  // Drop the slot after a generous deadline; the cache stays unset, so the
+  // next request starts a fresh scan.
+  const watchdog = setTimeout(() => {
+    if (globalThis.__piSessionListPromise === trackedPromise) {
+      globalThis.__piSessionListPromise = undefined;
+      globalThis.__piSessionListPromiseGeneration = undefined;
+      retired = true;
+    }
+  }, SESSION_LIST_LOAD_DEADLINE_MS);
+  watchdog.unref?.();
+
+  globalThis.__piSessionListPromise = trackedPromise;
+  globalThis.__piSessionListPromiseGeneration = generation;
+  watchdog.unref?.();
 
   globalThis.__piSessionListPromise = trackedPromise;
   globalThis.__piSessionListPromiseGeneration = generation;
@@ -144,6 +165,8 @@ declare global {
 }
 
 const SESSION_LIST_CACHE_TTL_MS = 30_000;
+/** Beyond this, an unsettled in-flight list load stops being coalesced. */
+const SESSION_LIST_LOAD_DEADLINE_MS = 60_000;
 
 /** Invalidate the session LIST metadata (30s TTL result + generation gate)
  * and the directory-walk cache, but leave per-session parse caches intact.
@@ -165,6 +188,7 @@ export function invalidateSessionListCache(): void {
   // never serve stale entries; the (size, mtimeMs) key already invalidates
   // the common case, this closes the remaining window.
   globalThis.__ompSessionEntriesCache?.clear();
+  globalThis.__ompSessionHistoryIndexes?.clear();
   // Unknown-source changes (full-flush fallback) have no known path to target
   // with invalidateSessionEntriesCache: clear every per-file SCAN memo too, or
   // an unknown same-size + same-mtime rewrite would keep serving the OLD list
@@ -196,6 +220,9 @@ export function invalidateSessionCaches(filePath?: string): void {
  * still hit the same entry. */
 export function invalidateSessionEntriesCache(filePath: string): void {
   globalThis.__ompSessionEntriesCache?.delete(sessionPathKey(filePath));
+  for (const [key, index] of globalThis.__ompSessionHistoryIndexes ?? []) {
+    if (index.pathKey === sessionPathKey(filePath)) globalThis.__ompSessionHistoryIndexes?.delete(key);
+  }
   invalidateSessionScanCache(filePath);
 }
 
@@ -526,6 +553,211 @@ export async function getSessionEntriesForDisplayAsync(
   }
 }
 
+interface HistoryEntryRange {
+  id: string;
+  offset: number;
+  length: number;
+  firstKeptEntryId?: string;
+  legacyCustom?: boolean;
+}
+
+interface SessionHistoryIndex {
+  pathKey: string;
+  version: string;
+  bytes: number;
+  rows: HistoryEntryRange[];
+  entryIds: string[];
+  positions: Map<string, number>;
+  compactionId: string | null;
+  metadata: Omit<SessionContext, "messages" | "entryIds">;
+  leafId: string | null;
+  tipId: string | null;
+}
+
+declare global {
+  var __ompSessionHistoryIndexes: Map<string, SessionHistoryIndex> | undefined;
+}
+
+// Independent of the 256 MiB RAW parse cache: only offsets, IDs and selected
+// branch metadata live here, never transcript bodies or compaction summaries.
+// Charge UTF-16 strings plus per-row/map overhead; both LRU bounds apply.
+const MAX_HISTORY_INDEX_BYTES = 32 * 1024 * 1024;
+const MAX_HISTORY_INDEXES = 32;
+
+function historyFileVersion(stat: Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+/** The shared loader still owns title slots, lenient parsing and migrations.
+ * Discard bodies before retaining each entry; keep only selection inputs. */
+function historyEntryMetadata(entry: SessionEntry): SessionEntry {
+  const compact: Record<string, unknown> = {
+    type: entry.type, id: entry.id, parentId: entry.parentId, timestamp: entry.timestamp,
+  };
+  if (entry.type === "message" && isRecord(entry.message)) {
+    const message = entry.message;
+    compact.message = {
+      role: message.role, provider: message.provider, model: message.model,
+      ...(message.role === "toolResult" && message.toolName === "todo" ? {
+        toolName: message.toolName, isError: message.isError,
+        details: isRecord(message.details) ? { phases: message.details.phases } : undefined,
+      } : {}),
+    };
+  } else if (entry.type === "model_change") {
+    Object.assign(compact, { model: entry.model, role: entry.role, provider: entry.provider, modelId: entry.modelId });
+  } else if (entry.type === "thinking_level_change") {
+    compact.thinkingLevel = entry.thinkingLevel;
+  } else if (entry.type === "compaction") {
+    compact.firstKeptEntryId = entry.firstKeptEntryId;
+    compact.firstKeptEntryIndex = (entry as unknown as Record<string, unknown>).firstKeptEntryIndex;
+  } else if (entry.type === "branch_summary") {
+    compact.summary = entry.summary ? "present" : "";
+  } else if (entry.type === "custom" && entry.customType === "user_todo_edit") {
+    compact.customType = entry.customType;
+    compact.data = isRecord(entry.data) ? { phases: entry.data.phases } : undefined;
+  }
+  return compact as unknown as SessionEntry;
+}
+
+function buildHistoryIndex(
+  filePath: string, version: string, leafId?: string, includePreCompaction?: boolean,
+): SessionHistoryIndex {
+  const ranges = new WeakMap<SessionEntry, { offset: number; length: number }>();
+  const loaded = loadSessionFile(filePath, {
+    projectEntry(entry, offset, length) {
+      const compact = historyEntryMetadata(entry);
+      ranges.set(compact, { offset, length });
+      return compact;
+    },
+  });
+  if (loaded.error === "too_large") throw new SessionFileTooLargeError(filePath);
+  const { selected, compactionId, ...metadata } = selectSessionContext(loaded.entries, leafId, { includePreCompaction });
+  const rows = selected.map((entry): HistoryEntryRange => ({
+    id: entry.id,
+    ...ranges.get(entry)!,
+    ...(entry.type === "compaction" ? { firstKeptEntryId: entry.firstKeptEntryId } : {}),
+    ...(entry.type === "message" && entry.message.role === "custom" ? { legacyCustom: true } : {}),
+  }));
+  const tipId = loaded.entries.at(-1)?.id ?? null;
+  // Detach metadata strings from the parser's JSON source: an ID represented
+  // by a sliced V8 string must not pin a multi-megabyte message body.
+  const serialized = JSON.stringify({
+    rows, compactionId, metadata, tipId,
+    leafId: leafId && loaded.entries.some((entry) => entry.id === leafId) ? leafId : tipId,
+  });
+  const detached = JSON.parse(serialized) as Pick<SessionHistoryIndex, "rows" | "compactionId" | "metadata" | "tipId" | "leafId">;
+  const entryIds = detached.rows.map((row) => row.id);
+  const positions = new Map(entryIds.map((id, position) => [id, position]));
+  const bytes = 256 + serialized.length * 2 + rows.length * 192;
+  return { ...detached, pathKey: sessionPathKey(filePath), version, bytes, entryIds, positions };
+}
+
+/** Rebuild on any file-version change: growth alone cannot prove that old
+ * offsets survived a prefix rewrite. Both readers share the same bounded LRU. */
+function getSessionHistoryIndex(filePath: string, leafId?: string, includePreCompaction = false) {
+  const cache = globalThis.__ompSessionHistoryIndexes ??= new Map();
+  const pathKey = sessionPathKey(filePath);
+  const key = JSON.stringify([pathKey, leafId ?? null, includePreCompaction]);
+  let stat: Stats | undefined;
+  try { stat = statSync(filePath); } catch { /* Missing/unreadable: retain the lenient empty result. */ }
+  if (stat && stat.size > MAX_SESSION_LOAD_BYTES) {
+    invalidateSessionEntriesCache(filePath);
+    throw new SessionFileTooLargeError(filePath);
+  }
+  const version = stat ? historyFileVersion(stat) : "";
+  for (const [cachedKey, cached] of cache) {
+    if (cached.pathKey === pathKey && cached.version !== version) cache.delete(cachedKey);
+  }
+  let index = cache.get(key);
+  if (!index) {
+    index = buildHistoryIndex(filePath, version, leafId, includePreCompaction);
+    if (stat && historyFileVersion(statSync(filePath)) !== version) throw new Error("Session changed while indexing history");
+    // An unusually metadata-heavy file still opens, but cannot evict every
+    // peer or retain more than the entire index budget by itself.
+    if (stat && index.bytes <= MAX_HISTORY_INDEX_BYTES) cache.set(key, index);
+  } else {
+    cache.delete(key);
+    cache.set(key, index);
+  }
+  let totalBytes = 0;
+  for (const cached of cache.values()) totalBytes += cached.bytes;
+  while (cache.size > MAX_HISTORY_INDEXES || totalBytes > MAX_HISTORY_INDEX_BYTES) {
+    const oldest = cache.keys().next().value!;
+    totalBytes -= cache.get(oldest)!.bytes;
+    cache.delete(oldest);
+  }
+  return { index, cache, key };
+}
+
+/** Current active context IDs only; no body seeks or blob hydration. The
+ * returned IDs are cached and immutable, like getSessionEntries results. */
+export function getSessionContextBoundary(filePath: string): { entryIds: string[] } {
+  const { index } = getSessionHistoryIndex(filePath);
+  return { entryIds: index.entryIds };
+}
+
+/** Seek only page bodies. A file changed during indexing/reading must not
+ * advance the browser cursor using offsets from a different file version. */
+export function getSessionHistoryPage(
+  filePath: string,
+  cursor: SessionHistoryCursor | null,
+  limit: number,
+  leafId?: string,
+  options: { deferThinking?: boolean; deferToolResultImages?: boolean; includePreCompaction?: boolean } = {},
+): { history: SessionHistoryPage; leafId: string | null; tipId: string | null } {
+  const { index, cache, key } = getSessionHistoryIndex(filePath, leafId, !!options.includePreCompaction);
+  const version = index.version;
+
+  const { start, end, ...page } = selectHistoryRange(index.entryIds, cursor, limit, index.positions);
+  const rawEntries: SessionEntry[] = [];
+  if (start < end) {
+    const fd = openSync(filePath, "r");
+    try {
+      if (historyFileVersion(fstatSync(fd)) !== version) throw new Error("Session changed before reading history");
+      for (let i = start; i < end; i++) {
+        const row = index.rows[i];
+        const buffer = Buffer.allocUnsafe(row.length);
+        let read = 0;
+        while (read < buffer.length) {
+          const count = readSync(fd, buffer, read, buffer.length - read, row.offset + read);
+          if (count === 0) throw new Error("Session truncated while reading history");
+          read += count;
+        }
+        const entry = JSON.parse(buffer.toString("utf8").trim()) as SessionEntry;
+        // Reuse IDs/compaction links assigned by v1 migration; v2 renamed the
+        // hookMessage role. No migrated body is retained between requests.
+        entry.id = row.id;
+        if (entry.type === "compaction") entry.firstKeptEntryId = row.firstKeptEntryId!;
+        if (entry.type === "message" && row.legacyCustom) {
+          const message = entry.message as unknown as Record<string, unknown>;
+          if (message.role === "hookMessage") message.role = "custom";
+        }
+        rawEntries.push(entry);
+      }
+      if (historyFileVersion(fstatSync(fd)) !== version || historyFileVersion(statSync(filePath)) !== version) {
+        throw new Error("Session changed while reading history");
+      }
+    } catch (error) {
+      cache.delete(key);
+      throw error;
+    } finally {
+      closeSync(fd);
+    }
+  }
+  const entries = toDisplayEntries(rawEntries, { skipToolResultImages: options.deferToolResultImages });
+  const history: SessionHistoryPage = {
+    ...page,
+    context: {
+      ...index.metadata,
+      entryIds: index.entryIds.slice(start, end),
+      messages: entries.map((entry) => entry.type === "compaction"
+        ? compactionUiMessage(entry, entry.id === index.compactionId)
+        : entryToUiMessage(entry, options)!),
+    },
+  };
+  return { history, leafId: index.leafId, tipId: index.tipId };
+}
+
 function parseTodoPhases(value: unknown): TodoPhase[] | null {
   if (!Array.isArray(value)) return null;
   const statuses = new Set(["pending", "in_progress", "completed", "blocked", "abandoned"]);
@@ -560,7 +792,7 @@ export function getTodoPhasesFromEntries(entries: SessionEntry[], leafId?: strin
     entry = entry.parentId ? byId.get(entry.parentId) : undefined;
   }
 
-  for (let index = path.length - 1; index >= 0; index--) {
+  for (let index = 0; index < path.length; index++) {
     const current = path[index];
     if (current.type === "custom" && current.customType === "user_todo_edit") {
       const phases = isRecord(current.data) ? parseTodoPhases(current.data.phases) : null;
@@ -592,20 +824,30 @@ export function buildSessionContext(
   leafId?: string | null,
   options: { deferThinking?: boolean; deferToolResultImages?: boolean; includePreCompaction?: boolean } = {},
 ): SessionContext {
-  const emptyContext: SessionContext = { messages: [], entryIds: [], thinkingLevel: "off", model: null, todoPhases: [] };
+  const { selected, compactionId, ...metadata } = selectSessionContext(entries, leafId, options);
+  return {
+    ...metadata,
+    entryIds: selected.map((entry) => entry.id),
+    messages: selected.map((entry) => entry.type === "compaction"
+      ? compactionUiMessage(entry, entry.id === compactionId)
+      : entryToUiMessage(entry, options)!),
+  };
+}
+
+/** Select ordering and branch metadata without converting message bodies. */
+function selectSessionContext(
+  entries: SessionEntry[],
+  leafId?: string | null,
+  options: { includePreCompaction?: boolean } = {},
+) {
+  const empty = { selected: [] as SessionEntry[], compactionId: null as string | null, thinkingLevel: "off", model: null as SessionContext["model"], todoPhases: [] as TodoPhase[] };
   const byId = new Map<string, SessionEntry>();
   for (const e of entries) byId.set(e.id, e);
+  if (leafId === null) return empty;
+  const leaf = (leafId ? byId.get(leafId) : undefined) ?? entries.at(-1);
+  if (!leaf) return empty;
 
-  // Explicitly null — navigated to before the first entry.
-  if (leafId === null) return emptyContext;
-
-  let leaf: SessionEntry | undefined;
-  if (leafId) leaf = byId.get(leafId);
-  if (!leaf) leaf = entries[entries.length - 1];
-  if (!leaf) return emptyContext;
-
-  // Walk leaf → root. Corrupt files can contain parent cycles; stop at the
-  // first repeat so the walk stays bounded.
+  // Walk leaf → root, stopping at the first corrupt parent cycle.
   const path: SessionEntry[] = [];
   const seen = new Set<string>();
   let current: SessionEntry | undefined = leaf;
@@ -616,11 +858,9 @@ export function buildSessionContext(
   }
   path.reverse();
 
-  // Settings scan along the path: thinking level, model roles, last compaction.
   let thinkingLevel = "off";
   const models: Record<string, string> = {};
-  // Once an explicit default model_change is on the path, assistant-message
-  // inference must not overwrite it (temporary fallbacks carry the wrong id).
+  // Explicit defaults take precedence over temporary assistant fallbacks.
   let hasExplicitDefaultModel = false;
   let compaction: CompactionEntry | null = null;
   for (const entry of path) {
@@ -632,7 +872,6 @@ export function buildSessionContext(
         models[role] = entry.model;
         if (role === "default") hasExplicitDefaultModel = true;
       } else if (entry.provider && entry.modelId) {
-        // Legacy pi entry shape.
         models.default = `${entry.provider}/${entry.modelId}`;
         hasExplicitDefaultModel = true;
       }
@@ -645,22 +884,16 @@ export function buildSessionContext(
     }
   }
 
-  const messages: AgentMessage[] = [];
-  const entryIds: string[] = [];
+  const selected: SessionEntry[] = [];
   const appendEntry = (entry: SessionEntry) => {
-    const message = entry.type === "compaction"
-      ? compactionUiMessage(entry, entry.id === compaction?.id)
-      : entryToUiMessage(entry, options);
-    if (message) {
-      messages.push(message);
-      entryIds.push(entry.id);
+    if (entry.type === "compaction" || entry.type === "custom_message"
+      || (entry.type === "message" && isRecord(entry.message))
+      || (entry.type === "branch_summary" && entry.summary)) {
+      selected.push(entry);
     }
   };
-
   if (compaction && !options.includePreCompaction) {
     const activeCompaction = compaction;
-    // Agent-context view: active summary first, then entries kept from
-    // firstKeptEntryId up to the compaction, then everything after it.
     appendEntry(activeCompaction);
     const compactionIdx = path.findIndex((e) => e.type === "compaction" && e.id === activeCompaction.id);
     let foundFirstKept = false;
@@ -669,15 +902,11 @@ export function buildSessionContext(
       if (entry.id === activeCompaction.firstKeptEntryId) foundFirstKept = true;
       if (foundFirstKept) appendEntry(entry);
     }
-    for (let i = compactionIdx + 1; i < path.length; i++) {
-      appendEntry(path[i]);
-    }
+    for (let i = compactionIdx + 1; i < path.length; i++) appendEntry(path[i]);
   } else {
     for (const entry of path) appendEntry(entry);
   }
 
-  // Effective model: the "default" role, as "provider/modelId" (modelId may
-  // itself contain slashes, e.g. openrouter ids).
   let model: SessionContext["model"] = null;
   const defaultModel = models.default;
   if (defaultModel) {
@@ -686,8 +915,7 @@ export function buildSessionContext(
       ? { provider: defaultModel.slice(0, separator), modelId: defaultModel.slice(separator + 1) }
       : { provider: "", modelId: defaultModel };
   }
-
-  return { messages, entryIds, thinkingLevel, model, todoPhases: getTodoPhasesFromEntries(entries, leafId) };
+  return { selected, compactionId: compaction?.id ?? null, thinkingLevel, model, todoPhases: getTodoPhasesFromEntries(entries, leafId) };
 }
 
 function parseEntryTimestamp(timestamp: string): number | undefined {
@@ -830,6 +1058,56 @@ function keepTaskToolResultDetails(details: Record<string, unknown>): Record<str
   return Object.keys(kept).length > 0 ? kept : null;
 }
 
+function keepHubToolResultDetails(details: Record<string, unknown>): Record<string, unknown> | null {
+  const op = details.op;
+  if (typeof op !== "string" || (op !== "send" && op !== "jobs")) return null;
+  const kept: Record<string, unknown> = { op };
+  if (op === "send") {
+    const to = hubDetailTargets(details.to);
+    if (to) kept.to = to;
+    if (Array.isArray(details.receipts)) {
+      const receipts = details.receipts
+        .slice(0, TASK_DETAIL_MAX_ROWS)
+        .map((raw) => {
+          if (!isRecord(raw)) return null;
+          const out: Record<string, string> = {};
+          if (typeof raw.to === "string") out.to = truncateTaskDetailText(raw.to);
+          if (typeof raw.outcome === "string") out.outcome = truncateTaskDetailText(raw.outcome);
+          return Object.keys(out).length > 0 ? out : null;
+        })
+        .filter((entry): entry is Record<string, string> => entry !== null);
+      if (receipts.length > 0) kept.receipts = receipts;
+    }
+  } else {
+    if (Array.isArray(details.jobs)) {
+      const jobs = details.jobs
+        .slice(0, TASK_DETAIL_MAX_ROWS)
+        .map((raw) => {
+          if (!isRecord(raw)) return null;
+          const out: Record<string, unknown> = {};
+          for (const key of ["id", "type", "status", "label", "resolvedModel"] as const) {
+            if (typeof raw[key] === "string") out[key] = truncateTaskDetailText(raw[key]);
+          }
+          if (typeof raw.durationMs === "number" && Number.isFinite(raw.durationMs)) out.durationMs = raw.durationMs;
+          return Object.keys(out).length > 0 ? out : null;
+        })
+        .filter((entry): entry is Record<string, unknown> => entry !== null);
+      if (jobs.length > 0) kept.jobs = jobs;
+    }
+  }
+  return Object.keys(kept).length > 1 ? kept : null;
+}
+
+function hubDetailTargets(value: unknown): string[] | undefined {
+  const list = Array.isArray(value) ? value : typeof value === "string" ? [value] : undefined;
+  if (!list) return undefined;
+  const out = list
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .slice(0, TASK_DETAIL_MAX_ROWS)
+    .map((entry) => truncateTaskDetailText(entry));
+  return out.length > 0 ? out : undefined;
+}
+
 function stripToolResultDetails(message: AgentMessage): AgentMessage {
   if (message.role !== "toolResult" || message.details === undefined) return message;
   const { details, ...rest } = message;
@@ -840,6 +1118,10 @@ function stripToolResultDetails(message: AgentMessage): AgentMessage {
     if (message.toolName === "task") {
       const taskDetails = keepTaskToolResultDetails(details);
       if (taskDetails) Object.assign(kept, taskDetails);
+    }
+    if (message.toolName === "hub") {
+      const hubDetails = keepHubToolResultDetails(details);
+      if (hubDetails) Object.assign(kept, hubDetails);
     }
     if (Object.keys(kept).length > 0) return { ...rest, details: kept };
   }

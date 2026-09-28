@@ -1,11 +1,13 @@
 "use client";
+import { sendAgentCommand } from "@/lib/agent-client";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
-import { ChevronDown, ChevronUp, Layers, Paperclip, Square } from "lucide-react";
+import { ArrowDown, ChevronDown, ChevronUp, Layers, Paperclip, Square } from "lucide-react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolCallContent, ToolResultMessage } from "@/lib/types";
 import { translate, useI18n } from "@/lib/i18n";
 import { getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { isGroupAnchor, planTranscriptRows, type TranscriptRow } from "@/lib/chat-transcript-plan";
+import { resolveForkEntryIds } from "@/lib/chat-fork";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ExtensionDialog } from "./ExtensionDialog";
@@ -14,10 +16,14 @@ import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ComposerPanels } from "./ComposerPanels";
 import OmpWebLogo from "./OmpWebLogo";
 import { CHAT_COLUMN_MAX_WIDTH, MINIMAP_WIDTH } from "@/lib/chat-layout";
+import { WorkspaceState } from "./AppShell-layout";
 import { useAgentSession, type AgentPhase, type NoticeItem, type SubagentInfo } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
+import { useSpeechSynthesis, SpeechSynthesisProvider } from "@/hooks/useSpeechSynthesis";
+import { GithubRepoContext } from "@/lib/github-refs";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useModalDialog } from "@/hooks/useModalDialog";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
 import type { ProviderUsageContext } from "@/lib/provider-usage-types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
@@ -91,6 +97,44 @@ function getUserInputText(message: AgentMessage): string | null {
   return text.length > 0 ? text : null;
 }
 
+/**
+ * Text of the newest assistant reply for read-aloud. The live streaming
+ * message wins when present; otherwise the last committed assistant row is
+ * used, keyed by its entry id so the row's own speaker button lights up.
+ */
+function assistantSpeech(
+  messages: AgentMessage[],
+  entryIds: string[],
+  streaming: Partial<AgentMessage> | null,
+): { id: string; text: string } | null {
+  const textOf = (content: unknown): string => {
+    if (!Array.isArray(content)) return "";
+    return content
+      .filter((block: unknown): block is { type: "text"; text: string } => {
+        if (!block || typeof block !== "object") return false;
+        if (!("type" in block) || block.type !== "text") return false;
+        return "text" in block && typeof block.text === "string";
+      })
+      .map((block) => block.text)
+      .join("\n\n");
+  };
+
+  if (streaming && streaming.role === "assistant") {
+    const text = textOf(streaming.content);
+    if (text.trim()) {
+      return { id: streaming.timestamp ? String(streaming.timestamp) : "msg", text };
+    }
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const text = textOf(message.content);
+    if (!text.trim()) break;
+    return { id: entryIds[i] ?? (message.timestamp ? String(message.timestamp) : "msg"), text };
+  }
+  return null;
+}
+
 function withAssistantBlocks(
   message: AssistantMessage,
   content: AssistantContentBlock[],
@@ -101,25 +145,37 @@ function withAssistantBlocks(
   return next;
 }
 
-function OmpRuntimeVersion() {
+// Retain the last successful value across welcome-screen remounts, not reloads.
+let lastKnownOmpVersion: string | undefined;
+
+export function OmpRuntimeVersion() {
   const { t } = useI18n();
-  const [version, setVersion] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null | undefined>(lastKnownOmpVersion);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/omp-version")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { version: string | null } | null) => {
-        // omp reports "omp/17.1.3"; show just the number next to the label.
-        if (!cancelled && data?.version) setVersion(data.version.replace(/^omp\//, ""));
+      .then((res) => {
+        if (!res.ok) throw new Error(`Version lookup failed: HTTP ${res.status}`);
+        return res.json();
       })
-      .catch(() => {});
+      .then((data: { version: string | null } | null) => {
+        if (cancelled) return;
+        // omp reports "omp/17.1.3"; show just the number next to the label.
+        const nextVersion = typeof data?.version === "string" ? data.version.trim().replace(/^omp\//, "") : "";
+        lastKnownOmpVersion = nextVersion || undefined;
+        setVersion(nextVersion || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setVersion(lastKnownOmpVersion ?? null);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
   return (
-    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-      omp <span style={{ color: "var(--text)" }}>{version ? `v${version}` : t("chatWindow.versionNotFound")}</span>
+    <span aria-busy={version === undefined} style={{ fontSize: 11, color: "var(--text-muted)" }}>
+      omp <span style={{ color: "var(--text)" }}>{version === undefined ? t("appShell.loading") : version ? `v${version}` : t("chatWindow.versionNotFound")}</span>
     </span>
   );
 }
@@ -329,6 +385,12 @@ const CommittedTranscript = memo(function CommittedTranscript({
 }: CommittedTranscriptProps) {
   const { t } = useI18n();
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
+  // omp's `branch` command accepts a user entry only, so every row forks at the
+  // user prompt that started its turn (#103).
+  const forkEntryIds = useMemo(
+    () => resolveForkEntryIds(messages.map((message) => message.role), entryIds),
+    [messages, entryIds],
+  );
 
   const attachVisibleRef = (idx: number, refIndex: number) => (el: HTMLDivElement | null) => {
     messageRefs.current[refIndex] = el;
@@ -357,6 +419,9 @@ const CommittedTranscript = memo(function CommittedTranscript({
       }
     }
     if (options.showTimestamp !== undefined) showTimestamp = options.showTimestamp;
+    // Forking needs a branch point omp accepts, and a first user prompt has no
+    // earlier context to fork from — that one row keeps no fork action.
+    const canOfferFork = !sessionBusy && !isNew && !!forkEntryIds[idx] && !(idx === 0 && msg.role === "user");
     const view = (
       <MessageView
         key={`${keyPrefix}-view-${idx}`}
@@ -366,8 +431,9 @@ const CommittedTranscript = memo(function CommittedTranscript({
         cwd={messageCwd}
         onOpenFile={onOpenFile}
         entryId={entryIds[idx]}
-        onFork={sessionBusy || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
-        forking={forkingEntryId === entryIds[idx]}
+        forkEntryId={forkEntryIds[idx]}
+        onFork={canOfferFork ? handleFork : undefined}
+        forking={forkingEntryId === forkEntryIds[idx]}
         onNavigate={sessionBusy ? undefined : handleNavigate}
         prevAssistantEntryId={sessionBusy ? undefined : prevAssistantEntryId}
         onEditContent={handleEditContent}
@@ -507,11 +573,21 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   // checks the sound preference itself.
   const playDoneSoundRef = useRef(playDoneSound);
   playDoneSoundRef.current = playDoneSound;
+  const tts = useSpeechSynthesis();
+  const ttsRef = useRef(tts);
+  useEffect(() => {
+    ttsRef.current = tts;
+  }, [tts]);
+  // omp calls onAgentEnd in the same tick as the state update that commits the
+  // finished reply, so reading the transcript here would still see the previous
+  // one. Flag it instead and speak from the render that carries it.
+  const autoplayPendingRef = useRef(false);
+
   const wrappedOnAgentEnd = useCallback(() => {
     playDoneSoundRef.current();
+    if (ttsRef.current.autoPlayEnabled) autoplayPendingRef.current = true;
     onAgentEnd?.();
   }, [onAgentEnd]);
-
   // Stabilize the onEditContent ref; pairs with React.memo to avoid re-rendering history messages
   const handleEditContent = useCallback((content: string) => {
     chatInputRef?.current?.insertIfEmpty(content);
@@ -532,7 +608,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     subagents, subagentEvents, subagentTranscriptVersions, activeSubagentCount, currentTodoPhase, todoPhases,
     isNew,
     sessionIdRef, messagesEndRef, scrollContainerRef,
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
+    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, retrySession,
     handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction, handleCompact,
     removeQueuedMessage, promoteQueuedToSteer,
     handleBuiltinSlashCommand, togglePreCompactionHistory,
@@ -543,6 +619,12 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
     onOpenFile,
   });
+  useEffect(() => {
+    if (!autoplayPendingRef.current) return;
+    autoplayPendingRef.current = false;
+    const speech = assistantSpeech(messages, entryIds, streamState.streamingMessage);
+    if (speech) ttsRef.current.speak(speech.id, speech.text);
+  }, [messages, entryIds, streamState, agentRunning]);
   const sessionBusy = agentRunning || bashRunning;
   const modelCapacity = useMemo(() => {
     if (!displayModelValue) return null;
@@ -696,6 +778,13 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       if (raf !== null) cancelAnimationFrame(raf);
     };
   }, [loading, scrollContainerRef]);
+  const scrollToBottom = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ top: el.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+    setNearBottom(true);
+  }, [scrollContainerRef]);
   const sentinelRef = useRef<HTMLButtonElement>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
   // "auto" (observer fired while scrolling) anchors the viewport to the old
@@ -930,6 +1019,19 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     return () => controller.abort();
   }, [advisorEnabled]);
 
+  // GitHub repo of the session checkout, so bare `#123` in messages links to it.
+  const [githubRepo, setGithubRepo] = useState<string | null>(null);
+  useEffect(() => {
+    setGithubRepo(null);
+    if (!messageCwd) return;
+    const controller = new AbortController();
+    fetch(`/api/github-repo?cwd=${encodeURIComponent(messageCwd)}`, { signal: controller.signal })
+      .then((response) => response.ok ? response.json() as Promise<{ repo?: string | null }> : null)
+      .then((data) => setGithubRepo(data?.repo ?? null))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [messageCwd]);
+
   const advisorModelMeta = useMemo(() => {
     if (!advisorRoleSelector) return null;
     const [qualified, effort] = advisorRoleSelector.split(":");
@@ -941,6 +1043,20 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       reasoning: effort || null,
     };
   }, [advisorRoleSelector, modelList]);
+
+  // Ghost-text word completion rides the session's live omp process (the route
+  // never spawns one for a keystroke); before the first send there is none.
+  const handlePredictWord = useCallback(async (text: string, cursor: number) => {
+    const sid = session?.id ?? sessionIdRef.current;
+    if (!sid) return null;
+    const data = await sendAgentCommand<{ suffix: string | null } | null>(sid, { type: "predict_word", text, cursor });
+    return data?.suffix ?? null;
+  }, [session?.id, sessionIdRef]);
+  const handlePredictWordFeedback = useCallback((text: string, cursor: number, suggestion: string, accepted: boolean) => {
+    const sid = session?.id ?? sessionIdRef.current;
+    if (!sid) return;
+    sendAgentCommand(sid, { type: "predict_word_feedback", text, cursor, suggestion, accepted }).catch(() => {});
+  }, [session?.id, sessionIdRef]);
 
   const handleMinimize = useCallback(() => {
     setComposerMinimized(true);
@@ -978,6 +1094,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     <ChatInput
       ref={chatInputRef}
       onSend={handleSend}
+      onPredictWord={handlePredictWord}
+      onPredictWordFeedback={handlePredictWordFeedback}
       onAbort={handleAbort}
       onSteer={agentRunning ? handleSteer : undefined}
       onFollowUp={agentRunning ? handleFollowUp : undefined}
@@ -1041,22 +1159,30 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
 
   if (loading) {
-    return (
-      <div role="status" className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)" }}>
-        {t("chatWindow.loadingSession")}
-      </div>
-    );
+    return <WorkspaceState kind="loading" title={t("chatWindow.loadingSession")} />;
   }
 
   if (error) {
     return (
-      <div role="alert" className="flex h-full items-center justify-center" style={{ color: "var(--accent-strong)", padding: "0 16px", textAlign: "center", fontSize: 13 }}>
-        {error}
-      </div>
+      <WorkspaceState
+        kind="error"
+        title={error}
+        detail={(
+          <button
+            className="load-retry-button"
+            type="button"
+            onClick={retrySession}
+            style={{ justifySelf: "start", minHeight: 36, padding: "6px 14px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontWeight: 600, transition: "background var(--dur-fast) var(--ease-out-warm), transform var(--dur-fast) var(--ease-out-warm)" }}
+          >
+            {t("chatWindow.retry")}
+          </button>
+        )}
+      />
     );
   }
-
   return (
+    <SpeechSynthesisProvider value={tts}>
+    <GithubRepoContext.Provider value={githubRepo}>
     <div
       className="relative flex h-full flex-col overflow-hidden"
       onDragEnter={handleDragEnter}
@@ -1070,7 +1196,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             {[0, 0.8, 1.6].map((delay) => (
               <div
                 key={delay}
-                className="drop-ripple-ring absolute h-[720px] w-[720px] rounded-full border-[1.5px] border-solid"
+                className="drop-ripple-ring absolute h-180 w-180 rounded-full border-[1.5px] border-solid"
                 style={{ transformOrigin: "center", animationDelay: `${delay}s` }}
               />
             ))}
@@ -1113,7 +1239,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
 
       {isEmptyNew ? (
         <div className="relative flex flex-1 flex-col overflow-hidden">
-          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8" style={{ minHeight: 0 }}>
+          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto py-8" style={{ minHeight: 0, paddingInline: CHAT_COLUMN_PADDING }}>
           <div className="w-full" style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH }}>
             <div
                className="mb-3 empty-chat-brand"
@@ -1138,15 +1264,21 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
                 <OmpRuntimeVersion />
               </div>
             </div>
-            <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>{newSessionWorkspace}</div>
+            <div className="empty-session-intro">
+              <h1 className="display-serif">{t("appShell.newSessionTitle")}</h1>
+              <p>{t("appShell.newSessionDescription")}</p>
+            </div>
+            {newSessionWorkspace}
             <NoticeShelf notices={notices} onDismiss={dismissNotice} align="right" />
-            {chatInputElement}
+            {/* ChatInput insets itself by CHAT_COLUMN_PADDING; cancel this column's
+                padding so the composer matches its in-session width. */}
+            <div style={{ margin: `0 -${CHAT_COLUMN_PADDING}px` }}>{chatInputElement}</div>
           </div>
         </div>
         </div>
       ) : (
       <>
-      <div className="relative flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden" style={{ minHeight: 0 }}>
         <div
           style={{
             position: "absolute",
@@ -1165,7 +1297,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
         {/* Hide the Firefox scrollbar on desktop only: ChatMinimap provides the
             position indicator there, but on mobile there is no minimap and
             users need the scrollbar (Chrome's overlay scrollbar still shows). */}
-        <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto pt-6` + (isMobile ? "" : " [scrollbar-width:none] [&::-webkit-scrollbar]:hidden")}>
+        <div ref={scrollContainerRef} data-selection-scope="chat" tabIndex={-1} role="log" aria-live={streamState.isStreaming ? "off" : "polite"} aria-busy={streamState.isStreaming || undefined} aria-relevant="additions text" aria-label={t("chatWindow.conversation")} className={`flex-1 overflow-y-auto pt-6` + (isMobile ? "" : " scrollbar-none [&::-webkit-scrollbar]:hidden")} style={{ minHeight: 0 }}>
           <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div style={{ maxWidth: isMobile ? CHAT_COLUMN_MAX_WIDTH : CHAT_COLUMN_MAX_WIDTH_DESKTOP, margin: "0 auto" }}>
               <ExtensionStatusBar statuses={extensionStatuses} />
@@ -1265,6 +1397,18 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             </div>
           </div>
         </div>
+        {!nearBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            title={t("chatWindow.scrollToBottom")}
+            aria-label={t("chatWindow.scrollToBottom")}
+            className="chat-scroll-bottom ui-focus-ring"
+            style={{ position: "absolute", right: isMobile ? 16 : 48, bottom: 16, zIndex: 35, display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, padding: 0, border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text-muted)", cursor: "pointer", boxShadow: "var(--shadow-pop)" }}
+          >
+            <ArrowDown size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        )}
         {isMobile ? null : (
           <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, zIndex: 30, display: "flex", alignItems: "center", pointerEvents: "none" }}>
             <ChatMinimap
@@ -1349,7 +1493,9 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       </div>
       </>
       )}
-    </div>
+      </div>
+    </GithubRepoContext.Provider>
+    </SpeechSynthesisProvider>
   );
 }
 
@@ -1539,6 +1685,9 @@ function ExtensionCustomPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const displayLines = normalizeCustomPanelLines(request.lines);
+  const panelRef = useModalDialog<HTMLDivElement>({
+    onClose: () => onInput(request, "\x03"),
+  });
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -1558,6 +1707,9 @@ function ExtensionCustomPanel({
       }}
     >
       <div
+        ref={panelRef}
+        aria-label={t("chatWindow.extensionPanel")}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         onClick={(event) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, type RefObject } from "react";
+import { memo, useEffect, useState, type RefObject } from "react";
 import {
   AtSign,
   ChevronsDownUp,
@@ -48,6 +48,7 @@ interface Props {
   explorerIsRepo: boolean;
   explorerRefreshing: boolean;
   isMobile: boolean;
+  isCompactOverlay: boolean;
   onOpenFile: (filePath: string, fileName: string, sourceSessionId?: string | null) => void;
   onSelectFileTab: (id: string) => void;
   onCloseFileTab: (id: string) => void;
@@ -97,6 +98,7 @@ export const RightPanel = memo(function RightPanel({
   explorerIsRepo,
   explorerRefreshing,
   isMobile,
+  isCompactOverlay,
   onOpenFile,
   onSelectFileTab,
   onCloseFileTab,
@@ -119,12 +121,22 @@ export const RightPanel = memo(function RightPanel({
   const { t } = useI18n();
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const gitBadge = explorerIsRepo ? explorerGitCount : 0;
+  const [visitedViews, setVisitedViews] = useState<Set<RightPanelView>>(() => new Set(["explorer"]));
+  useEffect(() => {
+    setVisitedViews((previous) => {
+      if (previous.has(rightView)) return previous;
+      const next = new Set(previous);
+      next.add(rightView);
+      return next;
+    });
+  }, [rightView]);
 
   return (
     <>
       {/* Resize handle — desktop only, hidden while the panel is closed */}
       {!isMobile && rightPanelOpen && (
         <div
+          className="right-panel-resize-handle"
           role="separator"
           aria-orientation="vertical"
           aria-label={t("appShell.resizeFilePanel")}
@@ -150,14 +162,22 @@ export const RightPanel = memo(function RightPanel({
         />
       )}
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
-      <div
+      <aside
+        id="workspace-file-panel"
         ref={rightPanelRef}
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizing ? " right-panel-resizing" : ""}`}
+        role={isCompactOverlay ? "dialog" : undefined}
+        aria-modal={isCompactOverlay ? true : undefined}
+        aria-label={t("appShell.filePanel")}
+        aria-hidden={!rightPanelOpen}
+        tabIndex={isCompactOverlay ? -1 : undefined}
+        inert={!rightPanelOpen ? true : undefined}
         style={{
           display: "flex",
           flexDirection: "column",
           borderLeft: "1px solid var(--border)",
           background: "var(--bg)",
+          zIndex: isCompactOverlay ? 210 : undefined,
           ...(!isMobile && rightPanelWidth !== null ? { "--right-panel-width": `${rightPanelWidth}px` } : {}),
         }}
       >
@@ -309,8 +329,8 @@ export const RightPanel = memo(function RightPanel({
         </div>
 
         {/* Explorer tab view — kept mounted so expansion survives tab switches. */}
-        <div style={{ display: rightView === "explorer" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
-          {explorerCwd ? (
+        <div id="workspace-file-panel-explorer" role="tabpanel" aria-label={t("sessionSidebar.explorer")} style={{ display: rightView === "explorer" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
+          {visitedViews.has("explorer") && (explorerCwd ? (
             <>
               <div
                 title={explorerCwd}
@@ -375,11 +395,11 @@ export const RightPanel = memo(function RightPanel({
               <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 600 }}>{t("sessionSidebar.explorer")}</div>
               <div style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.6, maxWidth: 260 }}>{t("sessionSidebar.selectProjectFirst")}</div>
             </div>
-          )}
+          ))}
         </div>
         {/* Git changes tab view — kept mounted so selection survives tab switches. */}
-        <div style={{ display: rightView === "git" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
-          {explorerCwd ? (
+        <div id="workspace-file-panel-git" role="tabpanel" aria-label={t("tabBar.git")} style={{ display: rightView === "git" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
+          {visitedViews.has("git") && (explorerCwd ? (
             <GitChangesPanel
               cwd={explorerCwd}
               refreshKey={explorerRefreshKey}
@@ -393,10 +413,10 @@ export const RightPanel = memo(function RightPanel({
               <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 600 }}>{t("tabBar.git")}</div>
               <div style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.6, maxWidth: 260 }}>{t("sessionSidebar.selectProjectFirst")}</div>
             </div>
-          )}
+          ))}
         </div>
         {/* Keep open viewers mounted so switching tabs preserves scroll and preview state. */}
-        <div style={{ display: rightView === "file" ? "block" : "none", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div id="workspace-file-panel-file" role="tabpanel" aria-label={activeFileTab?.filePath ?? t("appShell.filePanel")} style={{ display: rightView === "file" ? "block" : "none", flex: 1, minHeight: 0, overflow: "hidden" }}>
           {fileTabs.length > 0 ? fileTabs.map((tab) => (
             <div key={tab.id} style={{ display: tab.id === activeFileTabId ? "block" : "none", height: "100%" }}>
               <FileViewer
@@ -404,6 +424,7 @@ export const RightPanel = memo(function RightPanel({
                 cwd={activeCwd ?? undefined}
                 sourceSessionId={tab.sourceSessionId}
                 gitRefreshKey={explorerRefreshKey}
+                active={tab.id === activeFileTabId && rightPanelOpen && rightView === "file"}
                 onMentionLines={tab.id === activeFileTabId && rightPanelOpen && rightView === "file" ? onMentionLines : undefined}
                 onOpenFile={(filePath) => onOpenFile(
                   filePath,
@@ -420,7 +441,7 @@ export const RightPanel = memo(function RightPanel({
             </div>
           )}
         </div>
-      </div>
+      </aside>
     </>
   );
 });

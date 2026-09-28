@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, useDeferredValue } from "react";
-import type { ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
+import type { ExitedRpcSession, ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -32,6 +32,10 @@ import {
 } from "./SessionSidebar-helpers";
 import { OmpWebTitle, SIDEBAR_BUTTON_TRANSITION, SidebarIconButton } from "./SessionSidebar-chrome";
 import { ProjectRow, ProjectWorktreeSwitcher } from "./SessionSidebar-rows";
+
+/** Deadline for one /api/sessions fetch. A wedged-but-listening server never
+ * answers; without this the initial spinner would pend forever. */
+const SESSIONS_FETCH_TIMEOUT_MS = 15_000;
 
 declare global {
   interface Window {
@@ -112,6 +116,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [runningSessionCwds, setRunningSessionCwds] = useState<Record<string, string>>({});
+  const [exitedSessions, setExitedSessions] = useState<Map<string, ExitedRpcSession>>(() => new Map());
   const knownRunningCwdsRef = useRef<Map<string, string>>(new Map());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
@@ -138,6 +143,12 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     sessionsAbortRef.current?.abort();
     const controller = new AbortController();
     sessionsAbortRef.current = controller;
+    // A wedged-but-listening server (the long-idle failure mode) accepts the
+    // TCP connection and never answers: without a deadline the fetch pends
+    // forever and the sidebar shows its initial spinner indefinitely. Abort
+    // with a TimeoutError so the catch surfaces an error and the
+    // visibility/online recovery below can retry later.
+    const timeout = setTimeout(() => controller.abort(new DOMException("Session list request timed out", "TimeoutError")), SESSIONS_FETCH_TIMEOUT_MS);
     try {
       if (showLoading) setLoading(true);
       const headers: Record<string, string> = {};
@@ -183,6 +194,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       if ((e as Error)?.name === "AbortError") return;
       setError(t("sessionSidebar.loadFailed", { detail: e instanceof Error ? e.message : String(e) }));
     } finally {
+      clearTimeout(timeout);
       initialLoadedRef.current = true;
       if (showLoading) setLoading(false);
     }
@@ -261,12 +273,14 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
           type?: string;
           runningSessionIds?: string[];
           runningSessions?: Array<{ id: string; cwd: string }>;
+          exitedSessions?: ExitedRpcSession[];
           refreshSessionList?: boolean;
           sessionIds?: string[];
         };
         if (data.type === "running") {
           sseAuthoritativeRef.current = true;
           setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+          setExitedSessions(new Map((data.exitedSessions ?? []).map((session) => [session.id, session])));
           if (data.runningSessions) {
             const nextCwds: Record<string, string> = {};
             for (const rs of data.runningSessions) {
@@ -298,6 +312,22 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       source.close();
     };
   }, [loadSessions, scheduleRefresh]);
+  // Long-idle recovery: while the tab is hidden the SSE connection can die
+  // (laptop sleep, network change, tab freeze) and its EventSource reconnect
+  // carries no list invalidation. Refresh whenever the user actually comes
+  // back or the network returns, so the list is never left stale/empty.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadSessions(false);
+    };
+    const onOnline = () => void loadSessions(false);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [loadSessions]);
 
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
@@ -526,7 +556,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     // until the file lands and the next refresh replaces the placeholder.
     const known = new Set(base.map((s) => s.id));
     const placeholders: SessionInfo[] = [];
-    for (const id of runningSessionIds) {
+    const visibleLiveIds = new Set(runningSessionIds);
+    for (const id of exitedSessions.keys()) visibleLiveIds.add(id);
+    for (const id of visibleLiveIds) {
       if (known.has(id)) continue;
       let ts = placeholderTsRef.current.get(id);
       if (!ts) {
@@ -536,6 +568,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       const isOptimistic = optimisticSession?.id === id;
       const sessionCwd = (isOptimistic ? optimisticSession.cwd : null)
         ?? runningSessionCwds[id]
+        ?? exitedSessions.get(id)?.cwd
         ?? knownRunningCwdsRef.current.get(id)
         ?? selectedCwd
         ?? "";
@@ -557,21 +590,20 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         ...(phKey ? { projectKey: phKey } : {}),
       });
     }
-    // Prune timestamps and known cwds for ids that are now materialized or no longer running
+    // Prune timestamps and known cwds for ids that are now materialized or no longer live.
     if (placeholderTsRef.current.size > placeholders.length) {
       for (const key of [...placeholderTsRef.current.keys()]) {
-        if (!runningSessionIds.has(key) || known.has(key)) placeholderTsRef.current.delete(key);
+        if (!visibleLiveIds.has(key) || known.has(key)) placeholderTsRef.current.delete(key);
       }
     }
-    if (knownRunningCwdsRef.current.size > runningSessionIds.size + (optimisticSession ? 1 : 0)) {
-      const activeIds = new Set(runningSessionIds);
-      if (optimisticSession) activeIds.add(optimisticSession.id);
+    if (knownRunningCwdsRef.current.size > visibleLiveIds.size + (optimisticSession ? 1 : 0)) {
+      if (optimisticSession) visibleLiveIds.add(optimisticSession.id);
       for (const key of [...knownRunningCwdsRef.current.keys()]) {
-        if (!activeIds.has(key) && known.has(key)) knownRunningCwdsRef.current.delete(key);
+        if (!visibleLiveIds.has(key) && known.has(key)) knownRunningCwdsRef.current.delete(key);
       }
     }
     return placeholders.length ? [...base, ...placeholders] : base;
-  }, [allSessions, optimisticSession, optimisticProjectRoot, runningSessionIds, runningSessionCwds, projectRootFor, selectedCwd]);
+  }, [allSessions, optimisticSession, optimisticProjectRoot, runningSessionIds, runningSessionCwds, exitedSessions, projectRootFor, selectedCwd]);
   const visibleProjects = useMemo(() => {
     let base = projects;
     const hasOpt = optimisticProjectRoot ? base.some((p) => comparableProjectPath(p.path) === comparableProjectPath(optimisticProjectRoot)) : false;
@@ -582,11 +614,14 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     // (new session's cwd wasn't registered as a project). Keep that workspace
     // visible so the placeholder row has a bucket to render in.
     const knownFolded = new Set(base.map((p) => comparableProjectPath(p.path)));
-    for (const id of runningSessionIds) {
+    const visibleLiveIds = new Set(runningSessionIds);
+    for (const id of exitedSessions.keys()) visibleLiveIds.add(id);
+    for (const id of visibleLiveIds) {
       if (allSessions.some((s) => s.id === id)) continue;
       const isOptimistic = optimisticSession?.id === id;
       const sessionCwd = (isOptimistic ? optimisticSession.cwd : null)
         ?? runningSessionCwds[id]
+        ?? exitedSessions.get(id)?.cwd
         ?? knownRunningCwdsRef.current.get(id)
         ?? selectedCwd
         ?? "";
@@ -600,14 +635,17 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       }
     }
     return base;
-  }, [optimisticProjectRoot, projects, runningSessionIds, runningSessionCwds, allSessions, optimisticSession, projectRootFor, selectedCwd]);
+  }, [optimisticProjectRoot, projects, runningSessionIds, runningSessionCwds, exitedSessions, allSessions, optimisticSession, projectRootFor, selectedCwd]);
 
   // ---- Derived project list ---------------------------------------------------
   const selectedProject = useMemo(() => projectRootFor(selectedCwd), [projectRootFor, selectedCwd]);
   // While a fresh optimistic/placeholder is pending (JSONL not yet on disk),
   // freeze ordering so the new project row does not flicker optimistic ->
   // confirmed position. New projects are allowed to append at the end.
-  const hasPendingNewSession = Boolean(optimisticSession || [...runningSessionIds].some((id) => !allSessions.some((ss) => ss.id === id)));
+  const hasPendingNewSession = Boolean(
+    optimisticSession
+    || [...runningSessionIds, ...exitedSessions.keys()].some((id) => !allSessions.some((session) => session.id === id)),
+  );
   const sortedProjectsBase = useMemo(() => sortManagedProjects(visibleProjects), [visibleProjects]);
   const sortedProjectsRef = useRef<ManagedProject[] | null>(null);
   const sortedProjects = useMemo(() => {
@@ -629,8 +667,8 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     [sortedProjects, visibleSessions],
   );
   const projectActivity = useMemo(
-    () => projectActivityCounts(visibleSessions, runningSessionIds, unreadSessionIds),
-    [visibleSessions, runningSessionIds, unreadSessionIds],
+    () => projectActivityCounts(visibleSessions, runningSessionIds, unreadSessionIds, exitedSessions.keys()),
+    [visibleSessions, runningSessionIds, unreadSessionIds, exitedSessions],
   );
 
   // Client-side filtering (Workspaces header: search + "running only").
@@ -1115,7 +1153,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   ) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
       {addProjectOpen && (
         <DirectoryPicker
           busy={addProjectBusy}
@@ -1215,7 +1253,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
             gap: 7,
             background: "var(--bg-hover)",
             border: "1px solid var(--border)",
-            borderRadius: 9,
+            borderRadius: "var(--radius-control)",
             color: selectedCwd ? "var(--text)" : "var(--text-dim)",
             cursor: selectedCwd ? "pointer" : "not-allowed",
             fontSize: 12.5,
@@ -1288,6 +1326,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       {searchOpen && (
         <div style={{ padding: "0 10px 6px", flexShrink: 0 }}>
           <input
+            className="sidebar-session-search"
             ref={searchInputRef}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1328,15 +1367,24 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
           }}
         >
           {loading && (
-            <div style={{ padding: "10px 4px", color: "var(--text-muted)", fontSize: 12 }}>
-              {t("sessionSidebar.loading")}
+            <div role="status" aria-live="polite" aria-label={t("sessionSidebar.loading")} style={{ display: "grid", gap: 10, padding: "10px 4px" }}>
+              <div aria-hidden="true" className="skeleton" style={{ width: "78%", height: 18 }} />
+              <div aria-hidden="true" className="skeleton" style={{ width: "92%", height: 30 }} />
+              <div aria-hidden="true" className="skeleton" style={{ width: "86%", height: 30 }} />
+              <div aria-hidden="true" className="skeleton" style={{ width: "68%", height: 30 }} />
             </div>
           )}
           {projectsError && (
-            <div style={{ padding: "10px 4px", color: "var(--accent)", fontSize: 12 }}>{projectsError}</div>
+            <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 4px", color: "var(--status-error)", fontSize: 12 }}>
+              <span>{projectsError}</span>
+              <button className="load-retry-button" type="button" onClick={() => { loadSessions(false); void loadProjects(); }} style={{ minHeight: 32, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>{t("sessionSidebar.refresh")}</button>
+            </div>
           )}
           {error && (
-            <div style={{ padding: "10px 4px", color: "var(--accent)", fontSize: 12 }}>{error}</div>
+            <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 4px", color: "var(--status-error)", fontSize: 12 }}>
+              <span>{error}</span>
+              <button className="load-retry-button" type="button" onClick={() => { loadSessions(false); void loadProjects(); }} style={{ minHeight: 32, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>{t("sessionSidebar.refresh")}</button>
+            </div>
           )}
           {!loading && !projectsError && !error && sortedProjects.length === 0 && (
             <div style={{ padding: "10px 4px", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
@@ -1374,6 +1422,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
                 selectedSessionId={selectedSessionId}
                 runningSessionIds={runningSessionIds}
                 unreadSessionIds={unreadSessionIds}
+                exitedSessions={exitedSessions}
                 relativeTimeNow={relativeTimeNow}
                 onActivate={activateProject}
                 onToggleExpand={toggleProjectExpanded}

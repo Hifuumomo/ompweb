@@ -254,7 +254,7 @@ if (!$NoAutostart -and (Test-Path $ServicePs1)) {
                 $trigger = New-ScheduledTaskTrigger -AtLogOn
                 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
                 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
                 Log-Message "  [OK] Scheduled Task created via PowerShell: $taskName"
             } catch {
                 Log-Message "  [WARN] Failed to create Scheduled Task: $($_.Exception.Message)"
