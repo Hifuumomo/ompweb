@@ -3325,17 +3325,6 @@ html.dark .dropdown-surface :is(select, option) {
   gap: 4px;
   height: 100%;
 }
-.shell-mobile-context {
-  display: none;
-  min-width: 0;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: "var(--text)";
-  font-size: 11px;
-  font-weight: 600;
-}
 .shell-topbar-center {
   position: absolute;
   top: 4.5px;
@@ -3385,10 +3374,6 @@ html.dark .dropdown-surface :is(select, option) {
   .shell-topbar-center .shell-topbar-breadcrumb {
     visibility: visible;
   }
-  .shell-mobile-context {
-    display: inline-flex;
-    align-items: center;
-  }
 
 }
 @media (max-width: 640px) {
@@ -3406,10 +3391,6 @@ html.dark .dropdown-surface :is(select, option) {
   }
   .shell-topbar-overflow-content > * {
     flex-shrink: 0;
-  }
-  .shell-mobile-context {
-    flex: 0 0 112px;
-    max-width: 112px;
   }
   .shell-topbar-tools {
     gap: 2px !important;
