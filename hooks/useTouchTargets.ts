@@ -29,7 +29,7 @@ export function storedTouchTargetsPreference(): TouchTargetsPreference {
   if (typeof window === "undefined") return DEFAULT_TOUCH_TARGETS;
   try {
     const value = localStorage.getItem(STORAGE_KEY);
-    return value && (value in VALID_TOUCH_TARGETS) ? (value as TouchTargetsPreference) : DEFAULT_TOUCH_TARGETS;
+    return value && Object.hasOwn(VALID_TOUCH_TARGETS, value) ? (value as TouchTargetsPreference) : DEFAULT_TOUCH_TARGETS;
   } catch {
     return DEFAULT_TOUCH_TARGETS;
   }

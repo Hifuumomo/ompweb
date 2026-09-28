@@ -3003,11 +3003,9 @@ html.dark .dropdown-surface :is(select, option) {
   transform: scale(0.98);
 }
 
-@media (pointer: coarse) {
-  .chat-scroll-bottom {
-    min-width: 44px;
-    min-height: 44px;
-  }
+html[data-touch-targets="accessible"] .chat-scroll-bottom {
+  min-width: 44px;
+  min-height: 44px;
 }
 
 /* Conversational motion: new turns settle into place while an active turn
@@ -3059,10 +3057,8 @@ html.dark .dropdown-surface :is(select, option) {
   color: var(--accent);
   background: var(--bg-hover);
 }
-@media (pointer: coarse) {
-  .message-copy-action {
-    min-height: 44px;
-  }
+html[data-touch-targets="accessible"] .message-copy-action {
+  min-height: 44px;
 }
 .message-overflow-toggle {
   display: inline-flex;
@@ -3091,10 +3087,8 @@ html.dark .dropdown-surface :is(select, option) {
 .message-overflow-toggle svg {
   transition: transform var(--dur-fast) var(--ease-out-warm);
 }
-@media (pointer: coarse) {
-  .message-overflow-toggle {
-    min-height: 44px;
-  }
+html[data-touch-targets="accessible"] .message-overflow-toggle {
+  min-height: 44px;
 }
 
 @keyframes toast-in {
@@ -4245,22 +4239,16 @@ html.dark .dropdown-surface :is(select, option) {
 .skip-link:focus { transform: translateY(0); }
 
 /* Touch target density options (Settings -> Touch Targets). */
-html[data-touch-targets="accessible"] .shell-toolbar-btn,
-html[data-touch-targets="accessible"] .right-panel-toolbar [role="toolbar"] > button {
-  min-width: 44px;
-  min-height: 44px;
-}
-html[data-touch-targets="accessible"] .composer-primary-action {
-  min-height: 44px;
+html[data-touch-targets="accessible"] :is(
+  .shell-toolbar-btn,
+  .right-panel-toolbar [role="toolbar"] > button,
+  .composer-primary-action
+) {
   min-width: 44px;
 }
 html[data-touch-targets="accessible"] .composer-toolbar {
   flex-wrap: wrap !important;
   gap: 4px;
-}
-html[data-touch-targets="accessible"] .composer-toolbar > button,
-html[data-touch-targets="accessible"] .composer-toolbar > div > button {
-  min-height: 44px;
 }
 
 /* Upstream coarse-pointer 44px targets, applied only in the Accessible mode. */
@@ -4389,9 +4377,6 @@ html[data-touch-targets="compact"] .settings-card {
   padding: 10px 16px !important;
   margin-bottom: 6px !important;
   gap: 12px !important;
-}
-html[data-touch-targets="compact"] .message-copy-action {
-  min-height: 28px !important;
 }
 
 @media (max-width: 640px) and (pointer: coarse) and (hover: none) {
