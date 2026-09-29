@@ -266,6 +266,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
   const extensionDialogClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const locallyAnsweredDialogRef = useRef<string | null>(null);
   useEffect(() => () => {
     if (extensionDialogClearTimerRef.current) clearTimeout(extensionDialogClearTimerRef.current);
   }, []);
@@ -1127,8 +1128,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, [catchUp, clearLiveToolResults, consumeQueuedMessage, eventCoalescer]);
 
-
-
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server
   // emits host_tool_call frames; this UI executes them and answers with
@@ -1312,6 +1311,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setExtensionDialog((current) => current?.id === request.id ? null : current);
       return;
     }
+    // Claim the dialog before awaiting: another tab answering broadcasts a
+    // synchronized "cancel" for the same request id, which must not tear down
+    // THIS tab's hand-off window. Cleared when the hand-off timer fires, or
+    // when a genuinely new request arrives.
+    locallyAnsweredDialogRef.current = request.id;
     try {
       await sendAgentCommand(sid, {
         type: "extension_ui_response",
@@ -1323,6 +1327,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       clearTimeout(extensionDialogClearTimerRef.current ?? undefined);
       extensionDialogClearTimerRef.current = setTimeout(() => {
         setExtensionDialog((current) => current?.id === request.id ? null : current);
+        if (locallyAnsweredDialogRef.current === request.id) locallyAnsweredDialogRef.current = null;
         extensionDialogClearTimerRef.current = null;
       }, 250);
     } catch (e) {
@@ -1367,10 +1372,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           clearTimeout(extensionDialogClearTimerRef.current);
           extensionDialogClearTimerRef.current = null;
         }
+        locallyAnsweredDialogRef.current = null;
         setExtensionDialog(request);
         break;
       case "cancel":
-        setExtensionDialog((current) => current?.id === request.targetId ? null : current);
+        if (request.targetId !== locallyAnsweredDialogRef.current) {
+          setExtensionDialog((current) => current?.id === request.targetId ? null : current);
+        }
         break;
       case "open_url": {
         // OAuth and similar flows: try to open a tab (often blocked outside a
