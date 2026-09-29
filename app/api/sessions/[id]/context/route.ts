@@ -65,10 +65,14 @@ export async function GET(
     const resolved = await resolveSessionPathOr404(id);
     if ("response" in resolved) {
       // OMP may not create the file until the first assistant message is
-      // committed. A live wrapper can still recover that first partial reply.
+      // committed. A live wrapper can still recover that first partial reply,
+      // and its persisted boundary is empty (the next prompt must not 404).
       // Never replace previously confirmed history when its file is missing.
-      const session = sync === "1" && !cursor?.lastEntryId && leafId === undefined ? getRpcSession(id) : undefined;
+      const session = boundary === "1" || (sync === "1" && !cursor?.lastEntryId && leafId === undefined) ? getRpcSession(id) : undefined;
       if (session?.isAlive() && !existsSync(session.sessionFile)) {
+        if (boundary === "1") {
+          return NextResponse.json({ entryIds: [] }, { headers: { "Cache-Control": "no-store" } });
+        }
         const response: SessionSyncResponse = {
           ...selectSessionHistory(buildSessionContext([]), cursor, limit),
           sessionId: id,
