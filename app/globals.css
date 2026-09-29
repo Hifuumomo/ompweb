@@ -4352,6 +4352,11 @@ html[data-touch-targets="compact"] .shell-toolbar-btn {
   min-width: 28px !important;
   min-height: 28px !important;
 }
+/* Theme and language pickers show an icon or label plus a chevron: keep the
+   compact height but let the width fit, or the icon collapses to nothing. */
+html[data-touch-targets="compact"] .shell-toolbar-btn.shell-toolbar-picker {
+  width: auto !important;
+}
 html[data-touch-targets="compact"] .composer-primary-action {
   min-height: 28px !important;
 }
