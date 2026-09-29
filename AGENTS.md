@@ -156,10 +156,15 @@ hooks/
 
 ### Auto-resume after a restart (`lib/session-resume.ts`)
 - Off by default (`autoResumeSessions` in `omp-web-settings.json`). When on,
-  `notifyRunningChange()` keeps `omp-web-interrupted-sessions.json` in the
-  agent dir listing sessions that are mid-run; startup
+  `notifyRunningChange()` keeps `omp-web-interrupted-sessions-<pid>.json` in
+  the agent dir listing sessions that are mid-run; startup
   (`instrumentation.node.ts`) consumes it, restarts each session and sends
   `RESUME_PROMPT`.
+- Each instance writes only its own pid's list, so a second omp-web sharing
+  the agent dir (e.g. `npm run dev` beside an installed one) never resumes or
+  overwrites sessions the other is running. Startup claims a list only when its
+  pid is dead or the file predates the last boot, plus the legacy unsuffixed
+  list. Same-boot pid reuse or a zombie writer leaves that list unresumed.
 - A service stop signals every process at once, so an omp child can die
   before omp-web's own SIGTERM handler runs. A session whose process died
   therefore stays listed for `EXIT_GRACE_MS`; the shutdown handler freezes the
