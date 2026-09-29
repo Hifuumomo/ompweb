@@ -120,6 +120,13 @@ test("does not link references in code, existing links, or glued to words and pa
   assert.doesNotMatch(html, /github\.com/);
 });
 
+test("does not leak react-markdown node metadata onto inline code", () => {
+  const html = renderMarkdown("Run `npm test` or [`docs`](https://example.com).");
+
+  assert.match(html, /<code class="markdown-inline-code">npm test<\/code>/);
+  assert.doesNotMatch(html, /\snode=/);
+});
+
 const agentLinkModule = await jiti.import("../lib/agent-links.ts");
 const { AgentLinkContext, agentLinkIds } = agentLinkModule;
 
