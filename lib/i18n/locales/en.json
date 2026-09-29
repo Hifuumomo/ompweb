@@ -488,6 +488,7 @@
   "chatWindow.subagentState.failed": "Failed",
   "chatWindow.subagentState.started": "Running",
   "chatWindow.subagentSummary": "{running} running · {total} total",
+  "chatWindow.completedSubagents": "Completed ({count})",
   "chatWindow.subagentsPanel": "Subagents",
   "chatWindow.subagentRetrying": "retrying {attempt}/{max}",
   "chatWindow.subagentRetryAttempt": "attempt {attempt}",
