@@ -254,8 +254,11 @@ handled or safely ignored.
   `?mode=completion` (bounded tail read that also works for transcripts
   beyond the 16MB paging cap) with a live `get_subagents` snapshot fallback
   for header enrichment; it never pages the raw transcript. Subagent ids are
-  `[A-Za-z0-9_-]{1,80}` — the route validates before joining to confine reads
-  to the sibling dir.
+  `[A-Za-z0-9_-]+` segments joined by `.`, because omp names a nested spawn
+  `Parent.Child` (`SUBAGENT_ID_RE` in `lib/subagent-types.ts`, which also
+  keeps `/`, `\` and `..` out of the joined path). The transcript route caps
+  them at 100 characters and validates before joining to confine reads to the
+  sibling dir.
 - **`agent://` links** (`lib/agent-links.ts`): `MarkdownBody` linkifies bare
   handles and inline code that is exactly a handle (remark plugin), keeps the
   `agent:` protocol through rehype-sanitize and `urlTransform`, and opens
