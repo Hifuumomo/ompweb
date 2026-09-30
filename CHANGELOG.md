@@ -31,6 +31,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 - Show free-text answers to agent questions (the ask tool's "Other" option and other `promptStyle` editor requests) in the chat font instead of the monospace code font.
 - Keep line breaks in agent dialog titles instead of running multi-line titles together on one line.
 - Restore the Settings toggle track, which the 44px hit area had squeezed into a dot. Cap Settings dropdowns at half the card width with an ellipsis for long options, and stack them below their label at full card width on narrow screens.
+- Give the top-bar theme picker the same padding and icon spacing as the language picker; its icon and arrow were squeezed into a 28px button.
 - Improve phone and tablet ergonomics with safe-area-aware top chrome, a focus-trapped mobile workspace drawer, an actionable first-run workspace state, touch-sized sidebar actions, narrow-screen composer wrapping, clearer settings loading/retry states, and quieter streaming announcements.
 - Keep the Extensions & Tools settings panel scrollable on desktop and touch layouts, including long MCP server lists.
 - Let non-native settings tabs render while the common OMP configuration loads, and show static MCP configuration before live status resolution.

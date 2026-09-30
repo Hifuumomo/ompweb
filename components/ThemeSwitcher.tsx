@@ -154,6 +154,10 @@ export function ThemeSwitcher() {
         aria-controls={open ? menuId : undefined}
         className="shell-toolbar-btn shell-toolbar-picker ui-focus-ring"
         style={{
+          width: "auto",
+          minWidth: isMobile ? 44 : 36,
+          padding: "0 8px",
+          gap: 4,
           background: open ? "var(--bg-selected)" : undefined,
           color: open ? "var(--text)" : undefined,
         }}
