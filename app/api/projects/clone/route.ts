@@ -80,21 +80,23 @@ export async function POST(req: Request) {
     if (error instanceof ProjectPathError) return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
     throw error;
   }
+  // Registered before any await so a cancel sent while the target is being
+  // created is not a 404; runGitClone then skips git and the stream cleans up.
+  const controller = new AbortController();
+  clones.set(id, controller);
+  req.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  if (req.signal.aborted) controller.abort();
   // Creating the (empty) target up front makes the existence check atomic, so
   // cleanup only ever removes a directory this request created.
   try {
     await mkdir(target);
   } catch (error) {
+    clones.delete(id);
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       return NextResponse.json({ error: `Already exists: ${target}`, code: "clone_target_exists" }, { status: 409 });
     }
     return apiErrorResponse(error);
   }
-
-  const controller = new AbortController();
-  clones.set(id, controller);
-  req.signal.addEventListener("abort", () => controller.abort(), { once: true });
-  if (req.signal.aborted) controller.abort();
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(streamController) {

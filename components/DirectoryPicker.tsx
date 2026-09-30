@@ -78,6 +78,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
   const [cloneLog, setCloneLog] = useState("");
   const [cloneStatus, setCloneStatus] = useState<string | null>(null);
   const cloneAbortRef = useRef<AbortController | null>(null);
+  const cloneRespondedRef = useRef(false);
   const cloneLogRef = useRef<HTMLPreElement>(null);
   const cloning = cloneId !== null;
   const locked = busy || cloning;
@@ -137,6 +138,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
     const id = crypto.randomUUID();
     const abort = new AbortController();
     cloneAbortRef.current = abort;
+    cloneRespondedRef.current = false;
     setCloneId(id);
     setCloneLog("");
     setCloneStatus(t("directoryPicker.cloning"));
@@ -147,6 +149,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
         body: JSON.stringify({ id, parent: currentPath, url: cloneUrl.trim() }),
         signal: abort.signal,
       });
+      cloneRespondedRef.current = true;
       if (!response.ok || !response.body) {
         const data = await response.json().catch(() => ({})) as { error?: string; code?: string };
         setCloneStatus(formatApiError({ ...data, error: data.error ?? `HTTP ${response.status}` }));
@@ -191,11 +194,17 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
   const cancelClone = () => {
     if (!cloneId) return;
     setCloneStatus(t("directoryPicker.cloneCancelling"));
-    // The stream stays open to report the cleanup (a 404 means the clone is
-    // already finishing and will report itself). Only a network failure falls
-    // back to dropping the stream, which cancels server-side too.
+    const dropStream = () => {
+      // Nothing was created yet (or the server cleans up on disconnect).
+      setCloneStatus(t("directoryPicker.cloneCancelled", { path: cloneTarget ?? "" }));
+      cloneAbortRef.current?.abort();
+    };
+    // Once the POST has responded, the stream stays open to report the cleanup
+    // (a 404 then means the clone is already finishing and reports itself).
+    // A 404 before that means the server has not registered the clone yet, so
+    // drop the POST: the server cancels it on disconnect before or during git.
     void fetch("/api/projects/clone", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: cloneId }) })
-      .catch(() => cloneAbortRef.current?.abort());
+      .then((response) => { if (response.status === 404 && !cloneRespondedRef.current) dropStream(); }, dropStream);
   };
 
   if (!portalTarget) return null;
