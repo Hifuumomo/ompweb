@@ -172,7 +172,7 @@ test("links agent:// handles before GitHub refs cannot claim their suffix", () =
 });
 
 test("drops rather than blanks agent: hrefs that are not subagent handles", () => {
-  const html = renderWithAgentLinks("[a](agent:Foo) <a href=\"agent:Bar\">b</a> agent://all `agent://all`");
+  const html = renderWithAgentLinks("[a](agent:Foo) <a href=\"agent:Bar\">b</a> agent://all `agent://all` [c](agent://all) <a href=\"agent://all?q=.x\">d</a>");
 
   assert.doesNotMatch(html, /href=""/);
   assert.doesNotMatch(html, /href="agent:/);

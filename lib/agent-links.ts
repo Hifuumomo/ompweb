@@ -23,11 +23,16 @@ const BROADCAST_URL = "agent://all";
 export const AgentLinkContext = createContext<((candidateIds: string[]) => void) | null>(null);
 
 /**
- * Keeps `agent://` hrefs, which react-markdown's default transform blanks, and
- * drops (rather than blanks) any other href the default transform rejects: the
- * sanitizer now admits `agent:`, and `href=""` would link to omp-web itself.
+ * Keeps `agent://` hrefs, which react-markdown's default transform blanks,
+ * except the write-only broadcast address, and drops (rather than blanks) any
+ * other href the default transform rejects: the sanitizer now admits `agent:`,
+ * and `href=""` would link to omp-web itself.
  */
-export const agentAwareUrlTransform: UrlTransform = (url) => (AGENT_HREF_RE.test(url) ? url : defaultUrlTransform(url) || undefined);
+export const agentAwareUrlTransform: UrlTransform = (url) => {
+  const match = AGENT_HREF_RE.exec(url);
+  if (match) return `agent://${match[1]}` === BROADCAST_URL ? undefined : url;
+  return defaultUrlTransform(url) || undefined;
+};
 
 /**
  * Subagent ids an `agent://` href may name, most specific first. Mirrors omp's
