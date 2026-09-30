@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState, type RefObject } from "react";
+import { memo, useEffect, useState, type Ref, type RefObject } from "react";
 import {
   AtSign,
   ChevronsDownUp,
@@ -32,7 +32,7 @@ interface Props {
   rightPanelOpen: boolean;
   rightPanelWidth: number | null;
   rightPanelResizing: boolean;
-  rightPanelRef: RefObject<HTMLDivElement | null>;
+  rightPanelRef: Ref<HTMLDivElement>;
   fileExplorerRef: RefObject<FileExplorerHandle | null>;
   revealPath: string | null;
   onRevealDone: () => void;
