@@ -146,7 +146,7 @@ export function ThemeSwitcher() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        className="shell-toolbar-btn ui-focus-ring"
+        className="shell-toolbar-btn shell-toolbar-picker ui-focus-ring"
         style={{
           background: open ? "var(--bg-selected)" : undefined,
           color: open ? "var(--text)" : undefined,

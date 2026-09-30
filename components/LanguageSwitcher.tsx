@@ -109,7 +109,7 @@ export function LanguageSwitcher() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        className="shell-toolbar-btn ui-focus-ring"
+        className="shell-toolbar-btn shell-toolbar-picker ui-focus-ring"
         style={{
           width: "auto",
           minWidth: isMobile ? 44 : 36,

@@ -4,6 +4,7 @@
 @import "tailwindcss" source(none);
 @source inline("data-font-size");
 @source inline("data-ui-scale");
+@source inline("data-touch-targets");
 @source "../app";
 @source "../components";
 @source "../hooks";
@@ -2984,11 +2985,9 @@ html.dark .dropdown-surface :is(select, option) {
   transform: scale(0.98);
 }
 
-@media (pointer: coarse) {
-  .chat-scroll-bottom {
-    min-width: 44px;
-    min-height: 44px;
-  }
+html[data-touch-targets="accessible"] .chat-scroll-bottom {
+  min-width: 44px;
+  min-height: 44px;
 }
 
 /* Conversational motion: new turns settle into place while an active turn
@@ -3040,10 +3039,8 @@ html.dark .dropdown-surface :is(select, option) {
   color: var(--accent);
   background: var(--bg-hover);
 }
-@media (pointer: coarse) {
-  .message-copy-action {
-    min-height: 44px;
-  }
+html[data-touch-targets="accessible"] .message-copy-action {
+  min-height: 44px;
 }
 .message-overflow-toggle {
   display: inline-flex;
@@ -3072,10 +3069,8 @@ html.dark .dropdown-surface :is(select, option) {
 .message-overflow-toggle svg {
   transition: transform var(--dur-fast) var(--ease-out-warm);
 }
-@media (pointer: coarse) {
-  .message-overflow-toggle {
-    min-height: 44px;
-  }
+html[data-touch-targets="accessible"] .message-overflow-toggle {
+  min-height: 44px;
 }
 
 @keyframes toast-in {
@@ -4224,7 +4219,22 @@ html.dark .dropdown-surface :is(select, option) {
   transition: transform var(--dur-fast) var(--ease-out-warm);
 }
 .skip-link:focus { transform: translateY(0); }
-@media (pointer: coarse) {
+
+/* Touch target density options (Settings -> Touch Targets). */
+html[data-touch-targets="accessible"] :is(
+  .shell-toolbar-btn,
+  .right-panel-toolbar [role="toolbar"] > button,
+  .composer-primary-action
+) {
+  min-width: 44px;
+}
+html[data-touch-targets="accessible"] .composer-toolbar {
+  flex-wrap: wrap !important;
+  gap: 4px;
+}
+
+/* Upstream coarse-pointer 44px targets, applied only in the Accessible mode. */
+html[data-touch-targets="accessible"] :is(
   .composer-toolbar > button,
   .composer-toolbar > div > button,
   .composer-primary-action,
@@ -4243,35 +4253,49 @@ html.dark .dropdown-surface :is(select, option) {
   .sidebar-session-search,
   .attachment-remove-button,
   .archive-search-input,
-  .archive-search-clear {
+  .archive-search-clear
+) {
     min-height: 44px !important;
-  }
+}
+html[data-touch-targets="accessible"] :is(
   .attachment-remove-button,
   .file-explorer-search-clear,
-  .archive-search-clear {
+  .archive-search-clear
+) {
     min-width: 44px;
-  }
-  .load-retry-button {
+}
+html[data-touch-targets="accessible"] :is(
+  .load-retry-button
+) {
     min-width: 44px;
     min-height: 44px;
-  }
-  .toast-close-button {
+}
+html[data-touch-targets="accessible"] :is(
+  .toast-close-button
+) {
     min-width: 44px;
     min-height: 44px;
-  }
+}
+html[data-touch-targets="accessible"] :is(
   .sidebar-new-session,
   .process-details-toggle,
   .activity-row-trigger,
   .session-item-icon-button,
-  .tool-call-input-toggle {
+  .tool-call-input-toggle
+) {
     min-height: 44px !important;
-  }
-  .git-change-row {
+}
+html[data-touch-targets="accessible"] :is(
+  .git-change-row
+) {
     min-height: 44px;
-  }
-  .dialog-action {
+}
+html[data-touch-targets="accessible"] :is(
+  .dialog-action
+) {
     min-height: 44px;
-  }
+}
+html[data-touch-targets="accessible"] :is(
   .settings-back,
   .settings-close-btn,
   .settings-header input,
@@ -4279,22 +4303,72 @@ html.dark .dropdown-surface :is(select, option) {
   .providers-segmented-btn,
   .agent-config-action,
   .agent-config-search,
-  .agent-config-row {
+  .agent-config-row
+) {
     min-height: 44px;
-  }
+}
+html[data-touch-targets="accessible"] :is(
   .mcp-refresh-button,
   .mcp-server-select,
   .mcp-add-server,
   .mcp-config-input,
-  .mcp-action {
+  .mcp-action
+) {
     min-height: 44px;
-  }
+}
+html[data-touch-targets="accessible"] :is(
   .settings-close-btn,
-  .mcp-refresh-button {
+  .mcp-refresh-button
+) {
     min-width: 44px;
-  }
-  .settings-close-btn {
+}
+html[data-touch-targets="accessible"] :is(
+  .settings-close-btn
+) {
     min-width: 44px;
+}
+
+html[data-touch-targets="compact"] .shell-toolbar-btn {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+}
+/* Theme and language pickers show an icon or label plus a chevron: keep the
+   compact height but let the width fit, or the icon collapses to nothing. */
+html[data-touch-targets="compact"] .shell-toolbar-btn.shell-toolbar-picker {
+  width: auto !important;
+}
+html[data-touch-targets="compact"] .composer-primary-action {
+  min-height: 28px !important;
+}
+html[data-touch-targets="compact"] .composer-toolbar > button,
+html[data-touch-targets="compact"] .composer-toolbar > div > button {
+  min-height: 28px !important;
+}
+html[data-touch-targets="compact"] .session-item-row {
+  min-height: 30px !important;
+}
+html[data-touch-targets="compact"] .session-item-trailing {
+  height: 24px !important;
+  width: 68px !important;
+}
+html[data-touch-targets="compact"] .session-item-menu-button {
+  width: 24px !important;
+  height: 24px !important;
+}
+html[data-touch-targets="compact"] .session-item-row .session-item-button {
+  padding-right: 70px !important;
+}
+html[data-touch-targets="compact"] .settings-card {
+  padding: 10px 16px !important;
+  margin-bottom: 6px !important;
+  gap: 12px !important;
+}
+
+@media (max-width: 640px) and (pointer: coarse) and (hover: none) {
+  html:not([data-touch-targets="compact"]):not([data-touch-targets="accessible"]) .composer-primary-action {
+    min-height: 40px;
   }
 }
 
