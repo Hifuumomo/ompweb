@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from "fs";
 import { join } from "path";
-import { getConfigRoot } from "@/lib/omp/paths";
+import { getDiagnosticsDir } from "@/lib/omp/paths";
 
 export async function register(): Promise<void> {
   // Honor HTTP(S)_PROXY/NO_PROXY for server-side fetch (update checks, skill
@@ -60,8 +60,9 @@ export async function register(): Promise<void> {
   // are killed with their terminal; pages then show endless loading until the
   // process is restarted). Append fatal errors and event-loop stalls to a file
   // so the next incident explains itself. Node's default crash semantics are
-  // preserved — this only adds the record before exiting.
-  const logDir = join(getConfigRoot(), "omp-web");
+  // preserved — this only adds the record before exiting — except for client
+  // aborts, which are journaled and survived (see below).
+  const logDir = getDiagnosticsDir();
   const logPath = join(logDir, "diagnostics.log");
   const appendDiag = (kind: string, detail: string) => {
     try {
@@ -74,6 +75,17 @@ export async function register(): Promise<void> {
   };
   const describe = (value: unknown) => (value instanceof Error ? `${value.name}: ${value.message}\n${value.stack ?? ""}` : String(value));
   process.on("uncaughtException", (error) => {
+    // A client disconnecting mid-request can surface here as an unhandled
+    // `Error: aborted` (ECONNRESET): for POSTs through proxy.ts, Next's body
+    // cloning drops the request's `error` listeners (replaceRequestBody,
+    // vercel/next.js#99278). That is a peer event, not a corrupted server:
+    // journal it (one line, no stack, so aborts cannot rotate real crash
+    // records out of the journal quickly) and keep serving, as Next's own
+    // handler does.
+    if (error instanceof Error && error.message === "aborted" && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
+      appendDiag("client-abort", "uncaughtException Error: aborted (ECONNRESET)");
+      return;
+    }
     appendDiag("crash", `uncaughtException ${describe(error)}`);
     // An uncaughtException listener suppresses Node's default exit; keep the
     // crash-visible semantics by exiting explicitly.
