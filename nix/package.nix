@@ -40,12 +40,13 @@ let
     diff --git a/app/layout.tsx b/app/layout.tsx
     --- a/app/layout.tsx
     +++ b/app/layout.tsx
-    @@ -1,44 +1,45 @@
+    @@ -1,45 +1,46 @@
      import type { Metadata, Viewport } from "next";
      import Script from "next/script";
     -import { Geist, JetBrains_Mono, Noto_Sans_Mono, Noto_Serif_SC, Source_Serif_4 } from "next/font/google";
     +import localFont from "next/font/local";
      import { ThemeColor } from "@/hooks/useTheme";
+     import { IosFocusZoomGuard } from "@/components/IosFocusZoomGuard";
      import { SIDEBAR_HISTORY_BRIDGE_SCRIPT } from "@/lib/sidebar-history-bridge";
      import "./globals.css";
 
@@ -103,11 +104,9 @@ let
 
   '';
 
-  productionLib = lib.fileset.difference
-    ../lib
-    (lib.fileset.fileFilter
-      (file: lib.hasInfix ".test." file.name)
-      ../lib);
+  productionLib = lib.fileset.difference ../lib (
+    lib.fileset.fileFilter (file: lib.hasInfix ".test." file.name) ../lib
+  );
 
   src = lib.fileset.toSource {
     root = ../.;
@@ -120,10 +119,12 @@ let
       ../public
       ../scripts
 
+      ../instrumentation.ts
+      ../instrumentation.node.ts
+      ../next.config.ts
+      ../next-env.d.ts
       ../package.json
       ../package-lock.json
-      ../next.config.ts
-      ../instrumentation.ts
       ../postcss.config.mjs
       ../tailwind.config.ts
       ../tsconfig.json
@@ -135,7 +136,7 @@ in
 buildNpmPackage (finalAttrs: {
   pname = "ompweb";
   inherit src version;
-  
+
   patches = [ localFontsPatch ];
 
   postPatch = ''
@@ -147,9 +148,9 @@ buildNpmPackage (finalAttrs: {
     cp ${geist} app/fonts/Geist.ttf
   '';
 
-  npmDepsHash = "sha256-3oF6aA3/KxJTRC0ONX4ztG5s13b+IJqIHk1u4LVT1GQ=";
+  npmDepsHash = "sha256-HxT+m6bI0I3t9sqsSgHun6oXve3WtIEmkFpCoBplrC4=";
 
-  npmPackFlags = [ "--ignore-scripts" ];
+  # npmPackFlags = [ "--ignore-scripts" ];
 
   meta = {
     description = "Local web UI for the oh-my-pi (omp) coding agent";
