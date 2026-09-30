@@ -426,8 +426,8 @@ test("advisor custom messages use the localized advisor label", () => {
   assert.doesNotMatch(html, /customType/);
 });
 
-test("async-result notices keep their exact line layout and drop the wrapper tag", () => {
-  const html = renderToStaticMarkup(React.createElement(MessageView, {
+test("async-result notices start collapsed to their first line and expand to the exact line layout", () => {
+  const view = render(React.createElement(MessageView, {
     message: {
       role: "custom",
       customType: "async-result",
@@ -435,13 +435,19 @@ test("async-result notices keep their exact line layout and drop the wrapper tag
       display: true,
     },
   }));
-  assert.match(html, /<pre style="[^"]*white-space:pre;[^"]*">Background job bg_1 has completed\. Resume your work using the result below\.\n\/root\/repo\n---\nWall time: 0\.16 seconds<\/pre>/);
-  assert.doesNotMatch(html, /word-break/);
-  assert.doesNotMatch(html, /system-notice|<h2/);
+  assert.equal(view.container.querySelector("pre"), null);
+  assert.match(view.container.textContent, /Background job bg_1 has completed\. Resume your work using the result below\. …/);
+  assert.doesNotMatch(view.container.textContent, /Wall time/);
+
+  fireEvent.click(view.getByRole("button", { expanded: false }));
+  const pre = view.container.querySelector("pre");
+  assert.equal(pre.textContent, "Background job bg_1 has completed. Resume your work using the result below.\n/root/repo\n---\nWall time: 0.16 seconds");
+  assert.match(pre.getAttribute("style"), /white-space: pre;/);
+  assert.doesNotMatch(view.container.innerHTML, /system-notice|<h2/);
 });
 
-test("late LSP diagnostic notices keep their exact line layout and drop the wrapper tag", () => {
-  const html = renderToStaticMarkup(React.createElement(MessageView, {
+test("late LSP diagnostic notices expand to their exact line layout", () => {
+  const view = render(React.createElement(MessageView, {
     message: {
       role: "custom",
       customType: "lsp-late-diagnostic",
@@ -449,10 +455,57 @@ test("late LSP diagnostic notices keep their exact line layout and drop the wrap
       display: true,
     },
   }));
-  assert.match(html, /<pre style="[^"]*white-space:pre;[^"]*">Late LSP diagnostics arrived after the edit returned:\n\/repo\/a\.py — 0 error\(s\), 1 warning\(s\)\n\/repo\/a\.py:8:1 \[warning\] \[Ruff\] Import block is un-sorted or un-formatted\n\nhelp: Organize imports \(I001\)<\/pre>/);
-  assert.doesNotMatch(html, /system-notice/);
+  fireEvent.click(view.getByRole("button", { expanded: false }));
+  assert.equal(
+    view.container.querySelector("pre").textContent,
+    "Late LSP diagnostics arrived after the edit returned:\n/repo/a.py — 0 error(s), 1 warning(s)\n/repo/a.py:8:1 [warning] [Ruff] Import block is un-sorted or un-formatted\n\nhelp: Organize imports (I001)",
+  );
+  assert.doesNotMatch(view.container.innerHTML, /system-notice/);
 });
 
+test("developer reminders show their wrapper attributes, start collapsed, and toggle from the header", () => {
+  const view = render(React.createElement(MessageView, {
+    message: {
+      role: "custom",
+      customType: "developer",
+      content: [{ type: "text", text: '<system-reminder reason="rule_violation" rule="ts-no-tiny-functions" path="builtin-defaults:ts-no-tiny-functions.md" note="a>b">\nUser-defined rule matched tool-call arguments.\n\n## Why\n\n- One-line wrappers: no real behavior.\n</system-reminder>' }],
+      display: true,
+    },
+  }));
+  const header = view.getByRole("button", { expanded: false });
+  assert.match(header.textContent, /^system-reminder · reason=rule_violation · rule=ts-no-tiny-functions · path=builtin-defaults:ts-no-tiny-functions\.md · note=a>b/);
+  // A `>` inside an attribute value must not leak wrapper syntax into the body.
+  assert.match(view.container.textContent, /User-defined rule matched tool-call arguments\. …/);
+  assert.doesNotMatch(view.container.textContent, /b">/);
+  assert.doesNotMatch(view.container.textContent, /One-line wrappers/);
+
+  fireEvent.click(header);
+  assert.equal(header.getAttribute("aria-expanded"), "true");
+  assert.match(view.container.textContent, /One-line wrappers: no real behavior/);
+  assert.doesNotMatch(view.container.textContent, /<system-reminder/);
+
+  fireEvent.click(header);
+  assert.doesNotMatch(view.container.textContent, /One-line wrappers/);
+});
+
+test("a deferred thinking block rendered from a block subset loads its source block", async (t) => {
+  const requested = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    return new Response(JSON.stringify({ thinking: "loaded" }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const view = render(React.createElement(MessageView, {
+    message: { role: "assistant", provider: "t", model: "m", content: [{ type: "thinking", thinking: "", deferred: true }] },
+    sessionId: "s1",
+    entryId: "e1",
+    sourceBlockIndices: [2],
+  }));
+  await act(async () => { fireEvent.click(view.container.querySelector(".activity-row-trigger")); });
+  assert.equal(requested.length, 1);
+  assert.match(requested[0], /\/entries\/e1\/thinking\?blockIndex=2$/);
+});
 
 test("a running tool call shows a spinner instead of the no-result marker", () => {
   const html = renderToStaticMarkup(React.createElement(MessageView, {
