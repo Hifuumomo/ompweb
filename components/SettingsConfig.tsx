@@ -3,7 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useTransition, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { getSubmitDuringRunBehavior, getWordCompletionMode, setSubmitDuringRunBehavior, setWordCompletionMode, type SubmitDuringRunBehavior, type WordCompletionMode } from "@/lib/composer-prefs";
 import dynamic from "next/dynamic";
-import { ArrowLeft, Copy, Download, ExternalLink, RefreshCw, RotateCcw, Search, Monitor, Play, Square, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Copy, Download, ExternalLink, RefreshCw, RotateCcw, Search, Monitor, Play, Square, Trash2, X } from "lucide-react";
+import { COMPACTION_METHODS, DEFAULT_COMPACTION_METHOD_ORDER, type CompactionMethod } from "@/lib/compaction-methods";
 import { Alert } from "@/components/ui/field";
 import { toast } from "@/components/ui/toast";
 import { useI18n } from "@/lib/i18n";
@@ -52,7 +53,7 @@ type NativeSettings = {
   personality?: "default" | "friendly" | "pragmatic" | "none";
   advisor?: { enabled?: boolean; subagents?: boolean; syncBacklog?: "off" | "1" | "3" | "5"; immuneTurns?: number };
   tools?: { approvalMode?: "always-ask" | "write" | "yolo"; approval?: { bash?: "allow" | "prompt" | "deny"; extension?: "allow" | "prompt" } };
-  compaction?: { enabled?: boolean; midTurnEnabled?: boolean; strategy?: "snapcompact" | "handoff" | "context-full" | "shake" | "off"; autoContinue?: boolean; remoteEnabled?: boolean; keepRecentTokens?: number };
+  compaction?: { enabled?: boolean; midTurnEnabled?: boolean; methodOrder?: CompactionMethod[]; autoContinue?: boolean; keepRecentTokens?: number };
   memory?: { backend?: "off" | "local" | "mnemopi" | "hindsight" };
   autolearn?: { enabled?: boolean; autoContinue?: boolean; minToolCalls?: number };
   mnemopi?: { scoping?: "global" | "per-project" | "per-project-tagged"; autoRecall?: boolean; autoRetain?: boolean; noEmbeddings?: boolean };
@@ -162,7 +163,7 @@ const SETTING_INDEX: SettingIndexEntry[] = [
   // Context Compaction
   { id: "automatic-compaction", tab: "intelligence", sectionKey: "settingsConfig.contextCompaction", labelKey: "settingsConfig.automaticCompaction", descKey: "settingsConfig.automaticCompactionDesc", fallbackSection: "Context Compaction", fallbackLabel: "Automatic Compaction", fallbackDesc: "Compact context before model context limit is hit.", scope: "Native OMP" },
   { id: "continue-after-compaction", tab: "intelligence", sectionKey: "settingsConfig.contextCompaction", labelKey: "settingsConfig.continueAfterCompaction", descKey: "settingsConfig.continueAfterCompactionDesc", fallbackSection: "Context Compaction", fallbackLabel: "Continue After Compaction", fallbackDesc: "Resume task execution after compaction completes.", scope: "Native OMP" },
-  { id: "maintenance-strategy", tab: "intelligence", sectionKey: "settingsConfig.contextCompaction", labelKey: "settingsConfig.maintenanceStrategy", descKey: "settingsConfig.maintenanceStrategyDesc", fallbackSection: "Context Compaction", fallbackLabel: "Maintenance Strategy", fallbackDesc: "Select algorithm used to reduce context pressure.", scope: "Native OMP" },
+  { id: "compaction-method-order", tab: "intelligence", sectionKey: "settingsConfig.contextCompaction", labelKey: "settingsConfig.compactionMethodOrder", descKey: "settingsConfig.compactionMethodOrderDesc", fallbackSection: "Context Compaction", fallbackLabel: "Compaction Method Order", fallbackDesc: "Preferred fallback order for automatic context maintenance; unavailable or failed methods advance to the next choice.", scope: "Native OMP" },
   { id: "compact-mid-turn", tab: "intelligence", sectionKey: "settingsConfig.contextCompaction", labelKey: "settingsConfig.compactMidTurn", descKey: "settingsConfig.compactMidTurnDesc", fallbackSection: "Context Compaction", fallbackLabel: "Compact Mid-Turn", fallbackDesc: "Check context limits between tool execution steps.", scope: "Native OMP" },
   // Memory & Auto-Learn
   { id: "memory-backend", tab: "intelligence", sectionKey: "settingsConfig.memoryAutoLearn", labelKey: "settingsConfig.memoryBackend", descKey: "settingsConfig.memoryBackendDesc", fallbackSection: "Memory & Auto-Learn", fallbackLabel: "Memory Backend", fallbackDesc: "Where durable knowledge is stored across sessions.", scope: "Native OMP" },
@@ -418,6 +419,67 @@ function NativeSetting({ label, description, scope, searchId, children }: { labe
   );
 }
 
+/** Mirrors omp's ordered multi-select (`compaction.methodOrder`): checked methods run in
+ * their numbered order, unchecked ones are skipped; none checked disables automatic compaction. */
+function CompactionMethodOrder({ value, onChange, ...aria }: { value: readonly CompactionMethod[]; onChange: (next: CompactionMethod[]) => void } & EnhancedChildProps) {
+  const { t } = useI18n();
+  const groupRef = useRef<HTMLDivElement>(null);
+  // The moved row is re-inserted in the DOM once the save lands, which drops focus.
+  const refocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!refocusRef.current) return;
+    groupRef.current?.querySelector<HTMLButtonElement>(`[data-move="${refocusRef.current}"]`)?.focus();
+    refocusRef.current = null;
+  }, [value]);
+  const rows = [...value, ...COMPACTION_METHODS.filter((method) => !value.includes(method))];
+  const move = (method: CompactionMethod, delta: -1 | 1) => {
+    const index = value.indexOf(method);
+    if (index === -1 || !value[index + delta]) return;
+    const next = [...value];
+    [next[index], next[index + delta]] = [next[index + delta], next[index]];
+    refocusRef.current = `${method}:${delta}`;
+    onChange(next);
+  };
+  return (
+    <div ref={groupRef} role="group" className="compaction-method-order" {...aria}>
+      {rows.map((method) => {
+        const position = value.indexOf(method);
+        const label = t(`settingsConfig.compactionMethod.${method}`);
+        const description = t(`settingsConfig.compactionMethod.${method}Desc`);
+        const descId = `compaction-method-desc-${method}`;
+        const moveButton = (delta: -1 | 1) => {
+          const name = t(delta < 0 ? "settingsConfig.moveCompactionMethodUp" : "settingsConfig.moveCompactionMethodDown", { method: label });
+          const unavailable = position === -1 || !value[position + delta];
+          return (
+            <button type="button" data-move={`${method}:${delta}`} aria-disabled={unavailable} onClick={() => move(method, delta)} title={name} aria-label={name} className="ui-focus-ring">
+              {delta < 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+            </button>
+          );
+        };
+        return (
+          <div key={method} title={description} className="compaction-method-row" data-selected={position !== -1}>
+            <label>
+              <input
+                type="checkbox"
+                checked={position !== -1}
+                aria-label={position === -1 ? label : t("settingsConfig.compactionMethodPosition", { method: label, position: position + 1 })}
+                aria-describedby={descId}
+                onChange={(event) => onChange(event.target.checked ? [...value, method] : value.filter((item) => item !== method))}
+              />
+              <span aria-hidden="true" className="compaction-method-position">{position === -1 ? "" : `${position + 1}.`}</span>
+              <span>{label}</span>
+              <span id={descId} hidden>{description}</span>
+            </label>
+            {moveButton(-1)}
+            {moveButton(1)}
+          </div>
+        );
+      })}
+      <span role="status" className="settings-card-desc">{value.length === 0 ? t("settingsConfig.compactionMethodsNone") : ""}</span>
+    </div>
+  );
+}
+
 export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCallsDefaultCollapsedChange, onHideThinkingBlockChange, providerUsageVisible, onProviderUsageVisibleChange, scopeNativeSelectAll, onScopeNativeSelectAllChange, openUrlAutomatically, onOpenUrlAutomaticallyChange, cwd, sessionId, onModelsSaved, onPluginsReloaded, appUpdate, ompUpdateAvailable, ompUpdatesDisabled, onRefreshAppUpdate, onOmpUpdateAvailabilityChange, onRequestAppUpdate, onSelectTab, onClose }: {
   activeTab: SettingsTab;
   toolCallsDefaultCollapsed: boolean;
@@ -599,7 +661,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
 
   const patchSection = useCallback(<K extends keyof NativeSettings,>(key: K, patch: Partial<NonNullable<NativeSettings[K]>>) => {
     const base = latestNativeSettingsRef.current;
-    const section = (base ?? nativeSettings?.[key] ?? {}) as object;
+    const section = ((base ?? nativeSettings)?.[key] ?? {}) as object;
     void saveNativeSettings({ ...currentSettings(), [key]: { ...section, ...patch } });
   }, [currentSettings, nativeSettings, saveNativeSettings]);
 
@@ -757,8 +819,9 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        const target = e.target as HTMLElement | null;
-        if (target?.tagName === "INPUT" && (target as HTMLInputElement).value) return;
+        // Keep Escape for clearing a filled field; a checkbox's DOM value is always "on".
+        const target = e.target;
+        if (target instanceof HTMLInputElement && target.type !== "checkbox" && target.value) return;
         onClose();
       }
     };
@@ -1165,18 +1228,11 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                         onChange={(checked) => patchSection("compaction", { autoContinue: checked })}
                       />
                     </NativeSetting>
-                    <NativeSetting searchId="maintenance-strategy" label={t("settingsConfig.maintenanceStrategy")} description={t("settingsConfig.maintenanceStrategyDesc")} scope="Native OMP">
-                      <select
-                        style={nativeSelectStyle}
-                        value={nativeSettings?.compaction?.strategy ?? "snapcompact"}
-                        onChange={(e) => patchSection("compaction", { strategy: e.target.value as NonNullable<NativeSettings["compaction"]>["strategy"] })}
-                      >
-                        <option value="snapcompact" style={nativeOptionStyle}>{t("settingsConfig.strategySnapcompact")}</option>
-                        <option value="handoff" style={nativeOptionStyle}>{t("settingsConfig.strategyHandoff")}</option>
-                        <option value="context-full" style={nativeOptionStyle}>{t("settingsConfig.strategyContextFull")}</option>
-                        <option value="shake" style={nativeOptionStyle}>{t("settingsConfig.strategyShake")}</option>
-                        <option value="off" style={nativeOptionStyle}>{t("settingsConfig.strategyOff")}</option>
-                      </select>
+                    <NativeSetting searchId="compaction-method-order" label={t("settingsConfig.compactionMethodOrder")} description={t("settingsConfig.compactionMethodOrderDesc")} scope="Native OMP">
+                      <CompactionMethodOrder
+                        value={nativeSettings?.compaction?.methodOrder ?? DEFAULT_COMPACTION_METHOD_ORDER}
+                        onChange={(methodOrder) => patchSection("compaction", { methodOrder })}
+                      />
                     </NativeSetting>
                     <NativeSetting searchId="compact-mid-turn" label={t("settingsConfig.compactMidTurn")} description={t("settingsConfig.compactMidTurnDesc")} scope="Native OMP">
                       <ToggleSwitch
