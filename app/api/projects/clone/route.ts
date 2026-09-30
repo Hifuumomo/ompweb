@@ -24,10 +24,13 @@ type CloneFrame =
  *  cancel signals the whole group: ssh/remote helpers hold the output pipes
  *  open, so killing git alone would leave the clone hanging until they exit. */
 function runGitClone(url: string, target: string, signal: AbortSignal, onOutput: (text: string) => void): Promise<number | null> {
+  // Aborted while the target was being created: skip git; the caller cleans up.
+  if (signal.aborted) return Promise.resolve(null);
   const { promise, resolve } = Promise.withResolvers<number | null>();
   const child = spawn("git", ["clone", "--progress", "--", url, target], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "https:ssh" },
+    // An empty GIT_ASKPASS also overrides core.askPass/SSH_ASKPASS fallbacks.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GIT_ALLOW_PROTOCOL: "https:ssh" },
     detached: process.platform !== "win32",
     windowsHide: true,
   });
@@ -91,6 +94,7 @@ export async function POST(req: Request) {
   const controller = new AbortController();
   clones.set(id, controller);
   req.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  if (req.signal.aborted) controller.abort();
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(streamController) {
