@@ -29,6 +29,7 @@ import type { ProviderUsageContext } from "@/lib/provider-usage-types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import { resolveAvailableThinkingLevels } from "@/lib/thinking-levels";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
+import { AgentLinkContext, agentLinkTarget } from "@/lib/agent-links";
 import {
   captureScrollDistance,
   getNextVisibleCount,
@@ -755,6 +756,13 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     }
   }, [sessionKeyForPaging]);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
+  // Ref keeps the link handler stable so roster updates do not re-render every
+  // MarkdownBody through the context.
+  const subagentsRef = useRef(subagents);
+  subagentsRef.current = subagents;
+  const openAgentLink = useCallback((candidateIds: string[]) => {
+    setSelectedSubagent(agentLinkTarget(candidateIds, subagentsRef.current));
+  }, []);
   const [composerMinimized, setComposerMinimized] = useState(false);
   const minimizedExpandRef = useRef<HTMLButtonElement | null>(null);
   // True while the viewport is at/near the conversation bottom. Drives the
@@ -1185,6 +1193,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   return (
     <SpeechSynthesisProvider value={tts}>
     <GithubRepoContext.Provider value={githubRepo}>
+    <AgentLinkContext.Provider value={openAgentLink}>
     <div
       className="relative flex h-full flex-col overflow-hidden"
       onDragEnter={handleDragEnter}
@@ -1496,6 +1505,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       </>
       )}
       </div>
+    </AgentLinkContext.Provider>
     </GithubRepoContext.Provider>
     </SpeechSynthesisProvider>
   );

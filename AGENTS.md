@@ -247,6 +247,17 @@ handled or safely ignored.
   for header enrichment; it never pages the raw transcript. Subagent ids are
   `[A-Za-z0-9_-]{1,80}` — the route validates before joining to confine reads
   to the sibling dir.
+- **`agent://` links** (`lib/agent-links.ts`): `MarkdownBody` linkifies bare
+  handles and inline code that is exactly a handle (remark plugin), keeps the
+  `agent:` protocol through rehype-sanitize and `urlTransform`, and opens
+  the handle through `AgentLinkContext`, which `ChatWindow` provides with
+  `agentLinkTarget` (dotted nested id first, then the base id; unknown ids
+  open a disk-backed stub). Without a provider the handle renders as plain
+  text. The plugin runs after `remarkGithubRefs` (so `agent://Foo#12` is not an
+  issue link) and never links omp's write-only `agent://all`. Because the
+  shared sanitizer admits `agent:`, every `ReactMarkdown` host must drop
+  rejected hrefs (`defaultUrlTransform(url) || undefined`) — a blank `href=""`
+  links to omp-web itself; `FileViewer` does this.
 - **In-message task summary** (`components/MessageView.tsx` TaskResultPanel):
   the session reader allowlists a SIZE-BOUNDED subset of `task` toolResult
   details (telemetry only — no `output`/`stderr`, long text truncated to
