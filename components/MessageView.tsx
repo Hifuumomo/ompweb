@@ -1,8 +1,9 @@
 "use client";
 
-import { memo, useState, useId, useRef, useEffect, useLayoutEffect, useMemo, useCallback, type ComponentProps } from "react";
+import { memo, useState, useId, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useContext, type ComponentProps } from "react";
 import { Copy, Check, GitFork, CornerUpLeft, ChevronRight, ChevronDown, Brain, EyeOff, CircleAlert, CircleSlash, LoaderCircle, FileText, Search, FileEdit, Terminal, CheckSquare, Bot, Code2, Globe, MessagesSquare, Wrench, Volume2, Square } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
+import { AgentLinkContext, agentLinkIds } from "../lib/agent-links";
 import { MessageCopyActions } from "./MessageCopyActions";
 import { useSpeechContext } from "@/hooks/useSpeechSynthesis";
 import { ClickableImage } from "./ImageLightbox";
@@ -953,6 +954,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
   onOpenFile?: (filePath: string) => void;
 }) {
   const { t } = useI18n();
+  const openAgentLink = useContext(AgentLinkContext);
   // `partial` results are omp's live snapshots for a tool that is still
   // executing (see lib/types.ts); the committed toolResult replaces them.
   const isRunning = result?.partial === true;
@@ -1011,9 +1013,11 @@ const ToolCallBlock = memo(function ToolCallBlock({
       ? hubJobs.map((job) => job.label).join(" · ")
       : null;
 
-  const cleanFilePath = semantic.isFile && typeof block.input === "object" && block.input && "path" in block.input
-    ? String((block.input as Record<string, unknown>).path).split(":")[0]
+  const rawFilePath = semantic.isFile && typeof block.input === "object" && block.input && "path" in block.input
+    ? String((block.input as Record<string, unknown>).path).trim()
     : null;
+  const agentIds = agentLinkIds(rawFilePath ?? undefined);
+  const cleanFilePath = rawFilePath && agentIds.length === 0 ? rawFilePath.split(":")[0] : null;
 
   return (
     <div className={inGroup ? "activity-group-item" : "activity-row"} data-activity-operation="true">
@@ -1035,7 +1039,26 @@ const ToolCallBlock = memo(function ToolCallBlock({
           </span>
           <span className={`activity-row-tool${isError ? " activity-row-tool-error" : ""}`}>{hubTool ?? block.toolName}</span>
           <span className="activity-row-preview">
-            {cleanFilePath && onOpenFile ? (
+            {agentIds.length > 0 && openAgentLink ? (
+              <span
+                role="link"
+                tabIndex={0}
+                className="activity-file-link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openAgentLink(agentIds);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.stopPropagation();
+                    openAgentLink(agentIds);
+                  }
+                }}
+                title={hubPreview ?? preview}
+              >
+                {hubPreview ?? preview}
+              </span>
+            ) : cleanFilePath && onOpenFile ? (
               <span
                 role="button"
                 tabIndex={0}
