@@ -226,6 +226,55 @@ test("expanded tool calls show the compact command header", () => {
   assert.match(html, /\$<\/span><code>read foo\.ts<\/code>/);
 });
 
+test("read paths with an internal URL scheme are not file links", () => {
+  const render = (path) => renderToStaticMarkup(React.createElement(MessageView, {
+    onOpenFile() {},
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", toolCallId: "call-1", toolName: "read", input: { path } }],
+    },
+  }));
+
+  for (const path of ["history://ScoutAgent", "proc://Job1", " local://notes.md", "ftp://example.com/a.ts", "javascript://x%0Aalert(1)", "file:///etc/passwd"]) {
+    assert.doesNotMatch(render(path), /activity-file-link|role="link"/, path);
+  }
+  assert.match(render("src/foo.ts:10"), /activity-file-link/);
+});
+
+test("read paths with a web URL open the fetched page in a new tab without toggling the row", () => {
+  const opened = [];
+  const originalOpen = window.open;
+  window.open = (...args) => { opened.push(args.join(" ")); return null; };
+  const openedFiles = [];
+  try {
+    const cases = [
+      [" https://example.com/docs", "https://example.com/docs _blank noopener,noreferrer"],
+      ["HTTPS://Example.com/a:raw", "https://example.com/a _blank noopener,noreferrer"],
+      ["https://example.com:8080/a.md:10-20", "https://example.com:8080/a.md _blank noopener,noreferrer"],
+    ];
+    for (const [path, expected] of cases) {
+      opened.length = 0;
+      const { container, getByRole } = render(React.createElement(MessageView, {
+        onOpenFile(file) { openedFiles.push(file); },
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", toolCallId: "call-1", toolName: "read", input: { path } }],
+        },
+      }));
+      const trigger = container.querySelector("[aria-expanded]");
+      const expanded = trigger.getAttribute("aria-expanded");
+      fireEvent.click(getByRole("link"));
+      fireEvent.keyDown(getByRole("link"), { key: "Enter" });
+      assert.deepEqual(opened, [expected, expected], path);
+      assert.equal(trigger.getAttribute("aria-expanded"), expanded, path);
+      cleanup();
+    }
+  } finally {
+    window.open = originalOpen;
+  }
+  assert.deepEqual(openedFiles, []);
+});
+
 test("ask tool previews question prompts instead of object coercion", () => {
   const html = renderToStaticMarkup(React.createElement(MessageView, {
     isStreaming: true,

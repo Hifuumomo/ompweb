@@ -935,6 +935,17 @@ function inputsShallowEqual(a: unknown, b: unknown): boolean {
   return keysA.every((k) => (a as Record<string, unknown>)[k] === (b as Record<string, unknown>)[k]);
 }
 
+/** The page a `read` of an http(s) URL fetched, without read selectors such as `:raw` or `:10-20`. */
+function readTargetWebUrl(target: string): string | null {
+  try {
+    const url = new URL(target);
+    url.pathname = url.pathname.replace(/(?::(?:raw|-?\d[\d,+-]*))+$/, "");
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 const ToolCallBlock = memo(function ToolCallBlock({
   block,
   result,
@@ -1017,7 +1028,10 @@ const ToolCallBlock = memo(function ToolCallBlock({
     ? String((block.input as Record<string, unknown>).path).trim()
     : null;
   const agentIds = agentLinkIds(rawFilePath ?? undefined);
-  const cleanFilePath = rawFilePath && agentIds.length === 0 ? rawFilePath.split(":")[0] : null;
+  // `history://`, `proc://`, `local://`, ... are resolved by omp, not files the viewer can open.
+  const hasUrlScheme = rawFilePath !== null && /^[a-z][a-z0-9+.-]*:\/\//i.test(rawFilePath);
+  const webUrl = hasUrlScheme && /^https?:\/\//i.test(rawFilePath) ? readTargetWebUrl(rawFilePath) : null;
+  const cleanFilePath = rawFilePath && !hasUrlScheme ? rawFilePath.split(":")[0] : null;
 
   return (
     <div className={inGroup ? "activity-group-item" : "activity-row"} data-activity-operation="true">
@@ -1074,6 +1088,25 @@ const ToolCallBlock = memo(function ToolCallBlock({
                   }
                 }}
                 title={hubPreview ?? preview}
+              >
+                {hubPreview ?? preview}
+              </span>
+            ) : webUrl ? (
+              <span
+                role="link"
+                tabIndex={0}
+                className="activity-file-link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.open(webUrl, "_blank", "noopener,noreferrer");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.stopPropagation();
+                    window.open(webUrl, "_blank", "noopener,noreferrer");
+                  }
+                }}
+                title={webUrl}
               >
                 {hubPreview ?? preview}
               </span>
