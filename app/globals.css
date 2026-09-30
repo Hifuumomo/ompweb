@@ -646,6 +646,13 @@ html.dark {
 * {
   box-sizing: border-box;
 }
+input,
+button,
+select,
+textarea {
+  font-family: inherit;
+}
+
 
 html {
   /* Respect prefers-reduced-motion via the media query at the bottom. */

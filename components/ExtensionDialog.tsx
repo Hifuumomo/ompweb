@@ -171,14 +171,15 @@ export function ExtensionDialog({
                     aria-pressed={attached ? selected : undefined}
                     style={{
                       width: "100%",
-                      padding: "9px 10px",
-                      borderRadius: 7,
+                      padding: "7px 10px",
+                      borderRadius: 6,
                       border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`,
                       background: selected ? "color-mix(in srgb, var(--accent) 10%, var(--bg-panel))" : "var(--bg-panel)",
                       color: "var(--text)",
                       cursor: "pointer",
                       textAlign: "left",
-                      fontSize: 13,
+                      fontSize: 12.5,
+                      fontFamily: "inherit",
                       transition: attached ? undefined : "background-color var(--dur-fast) var(--ease-out-warm), border-color var(--dur-fast) var(--ease-out-warm)",
                     }}
                     onMouseEnter={attached ? undefined : (e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -202,13 +203,14 @@ export function ExtensionDialog({
               }}
               style={{
                 width: "100%",
-                padding: "9px 10px",
-                borderRadius: 7,
+                padding: "7px 10px",
+                borderRadius: 6,
                 border: "1px solid var(--border)",
                 background: "var(--bg-panel)",
                 color: "var(--text)",
                 outline: "none",
-                fontSize: 13,
+                fontSize: 12,
+                fontFamily: "inherit",
               }}
             />
           )}
