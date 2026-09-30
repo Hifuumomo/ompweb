@@ -258,6 +258,8 @@ handled or safely ignored.
   shared sanitizer admits `agent:`, every `ReactMarkdown` host must drop
   rejected hrefs (`defaultUrlTransform(url) || undefined`) — a blank `href=""`
   links to omp-web itself; `FileViewer` does this.
+  Tool rows (`ToolCallBlock` in `MessageView`) open an `agent://` `path`
+  through the same context.
 - **In-message task summary** (`components/MessageView.tsx` TaskResultPanel):
   the session reader allowlists a SIZE-BOUNDED subset of `task` toolResult
   details (telemetry only — no `output`/`stderr`, long text truncated to

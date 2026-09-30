@@ -41,7 +41,7 @@ export const agentAwareUrlTransform: UrlTransform = (url) => {
  */
 export function agentLinkIds(href: string | undefined): string[] {
   const match = href ? AGENT_HREF_RE.exec(href) : null;
-  if (!match) return [];
+  if (!match || `agent://${match[1]}` === BROADCAST_URL) return [];
   const [, id, path] = match;
   const segments = path.split("/").filter(Boolean);
   if (segments.length > 0 && segments.every((segment) => CHILD_SEGMENT_RE.test(segment))) {

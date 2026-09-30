@@ -7,6 +7,7 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const { MarkdownBody } = await jiti.import("./MarkdownBody.tsx");
+const { MessageView } = await jiti.import("./MessageView.tsx");
 const { AgentLinkContext } = await jiti.import("../lib/agent-links.ts");
 
 afterEach(cleanup);
@@ -22,4 +23,28 @@ test("clicking an agent:// link opens it in-app with nested-then-base candidates
   assert.equal(fireEvent.click(link, { button: 0 }), false, "click default must be prevented");
   assert.equal(fireEvent(link, new window.MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 })), false, "middle-click default must be prevented");
   assert.deepEqual(opened, [["Parent.Child", "Parent"]]);
+});
+
+test("a read of an agent:// handle opens the subagent from its tool row without toggling the row", () => {
+  const opened = [];
+  const openedFiles = [];
+  const renderRow = (path) => render(
+    React.createElement(AgentLinkContext.Provider, { value: (ids) => opened.push(ids) },
+      React.createElement(MessageView, {
+        onOpenFile: (file) => openedFiles.push(file),
+        message: { role: "assistant", content: [{ type: "toolCall", toolCallId: "call-1", toolName: "read", input: { path } }] },
+      })),
+  );
+
+  const { container, getByRole } = renderRow("agent://Parent/Child");
+  const trigger = container.querySelector("[aria-expanded]");
+  const expanded = trigger.getAttribute("aria-expanded");
+  fireEvent.click(getByRole("link"));
+  fireEvent.keyDown(getByRole("link"), { key: "Enter" });
+  assert.deepEqual(opened, [["Parent.Child", "Parent"], ["Parent.Child", "Parent"]]);
+  assert.equal(trigger.getAttribute("aria-expanded"), expanded);
+  cleanup();
+
+  assert.equal(renderRow("agent://all").queryByRole("link"), null, "the broadcast address is never linked");
+  assert.deepEqual(openedFiles, []);
 });
