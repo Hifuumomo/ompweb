@@ -1883,14 +1883,6 @@ export function AppShell() {
                 <Ellipsis size={16} strokeWidth={1.8} aria-hidden="true" />
               </summary>
               <div ref={mobileToolsContentRef} className="shell-topbar-overflow-content">
-                {showChat && (
-                  <span
-                    className="shell-mobile-context"
-                    title={`${projectLabel(selectedSession?.projectRoot ?? selectedSession?.cwd ?? activeCwd ?? "")} · ${selectedSession?.name || selectedSession?.firstMessage || t("appShell.newSession")}`}
-                  >
-                    {selectedSession?.name || selectedSession?.firstMessage || t("appShell.newSession")}
-                  </span>
-                )}
             <ThemeSwitcher />
             <LanguageSwitcher />
                 <button

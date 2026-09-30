@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { LOCALES, useI18n } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useFixedMenuPosition } from "@/hooks/useFixedMenuPosition";
 
 /** Language toggle for the top bar. Renders the current language and opens a
  * small menu to pick any locale directly, with full keyboard support:
@@ -31,10 +32,15 @@ export function LanguageSwitcher() {
     if (!open) setActiveIndex(index);
   }, [index, open]);
 
-  // Focus the active item whenever the menu opens or the highlight moves.
+  // Fixed positioning escapes the compact top-bar overflow strip, whose
+  // horizontal scroller would otherwise clip the menu to its 48px height.
+  const menuPos = useFixedMenuPosition(open, triggerRef, 120);
+  const menuShown = menuPos !== null;
+
+  // Focus the active item once the positioned menu mounts, or when the highlight moves.
   useEffect(() => {
-    if (open) itemRefs.current[activeIndex]?.focus();
-  }, [open, activeIndex]);
+    if (menuShown) itemRefs.current[activeIndex]?.focus();
+  }, [menuShown, activeIndex]);
 
   // Close on outside click / Escape is handled in onKeyDown below; also close
   // when the trigger loses focus to something outside the component.
@@ -134,16 +140,16 @@ export function LanguageSwitcher() {
         />
       </button>
 
-      {open && (
+      {open && menuPos && (
         <ul
           id={listboxId}
           role="menu"
           className="dropdown-surface animate-slide-down"
           style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            zIndex: 50,
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+            zIndex: 600,
             minWidth: 120,
             margin: 0,
             padding: 4,
