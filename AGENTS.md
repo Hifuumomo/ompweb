@@ -79,6 +79,7 @@ app/api/
   mcp/route.ts                    GET/POST/PUT/DELETE project MCP servers
   plugins/route.ts                GET/POST plugin management (shells out to `omp plugin`)
   projects/route.ts               GET registered+discovered projects | POST add | DELETE hide
+  projects/clone/route.ts         POST clone a git URL into a new workspace (NDJSON progress) | DELETE cancel
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
@@ -91,6 +92,7 @@ lib/
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
   github-refs.ts       remark plugin linking #N / owner/repo#N + GithubRepoContext
+  git-clone.ts         pure clone helpers: URL→directory name (https/ssh only), \r-aware progress log
   github-repo.ts       server: pick the gh-default GitHub remote from git config
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
@@ -291,6 +293,18 @@ handled or safely ignored.
   project rows are cards matching the session items' height/margins/accent
   treatment, and the active project's worktree selector renders directly
   below its row.
+
+### Clone a repository as a new workspace (`/api/projects/clone`)
+- The Add-workspace `DirectoryPicker` takes an optional Git URL; "Clone here"
+  clones into `<selected dir>/<repo name>`, then registers that directory
+  through the normal `POST /api/projects` path.
+- Only `https://`, `ssh://` and scp-like `user@host:path` URLs are accepted
+  (`cloneDirectoryName`); git also runs with `GIT_ALLOW_PROTOCOL=https:ssh`
+  and `GIT_TERMINAL_PROMPT=0`, so credentials must come from helpers/agents.
+- The POST streams NDJSON (`output` chunks, then one of `done` / `cancelled` /
+  `error`). Cancel is `DELETE { id }`: the POST stream stays open until the
+  partial clone is deleted, so the UI can confirm the cleanup. A client
+  disconnect cancels and cleans up too. An existing target is refused (409).
 
 ### File access allow-list
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/omp-cwd-*`, and roots explicitly added with `allowFileRoot()`.
