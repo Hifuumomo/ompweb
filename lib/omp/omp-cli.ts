@@ -86,7 +86,8 @@ export function getOmpVersion(): Promise<string | null> {
   return versionProbe;
 }
 
-function versionFingerprint(bin: string): string | null {
+/** Identity of the binary on disk; changes when it is replaced or updated. */
+export function versionFingerprint(bin: string): string | null {
   try {
     const target = realpathSync(bin);
     const stat = statSync(target, { bigint: true });
