@@ -4140,20 +4140,45 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     box-shadow: none;
   }
 
+  /* Full-screen overlay that slides in from the right edge. Closed panels are
+     hidden only after the exit slide finishes (visibility delay). Safe-area
+     padding keeps the panel clear of notches and rounded corners; the toolbar
+     takes the top inset so its background fills it, like the top bar's. */
   .right-panel-container {
+    position: fixed;
+    inset: 0;
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
     overflow: hidden;
-    transition: width var(--dur-med) var(--ease-out-warm), min-width var(--dur-med) var(--ease-out-warm);
-    flex-shrink: 0;
+    transition: transform var(--dur-slow) var(--ease-out-warm), visibility 0s;
+  }
+  .right-panel-toolbar {
+    padding-top: env(safe-area-inset-top, 0px);
+    min-height: calc(44px + env(safe-area-inset-top, 0px)) !important;
   }
   .right-panel-container.right-panel-open {
-    width: 100%;
-    min-width: 0;
+    transform: none;
+    visibility: visible;
+    /* The panel mounts on its first open, already open: start that first
+       render off-screen so it slides in too. */
+    @starting-style {
+      transform: translateX(100%);
+    }
   }
   .right-panel-container.right-panel-closed {
-    width: 0 !important;
-    min-width: 0 !important;
-    border-left: none !important;
-    display: none !important;
+    transform: translateX(100%);
+    visibility: hidden;
+    transition-delay: 0s, var(--dur-slow);
+  }
+  /* Reduced motion: hide the closed panel immediately, not after the slide. */
+  @media (prefers-reduced-motion: reduce) {
+    .right-panel-container {
+      transition-delay: 0s !important;
+    }
+  }
+  /* The panel ends up covering the whole screen, so a dimmed backdrop would
+     only flash over the chat while the panel slides in. */
+  .right-panel-backdrop {
+    display: none;
   }
   .directory-picker-back,
   .directory-picker-entry,
