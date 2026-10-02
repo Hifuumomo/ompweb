@@ -2583,3 +2583,99 @@ test("the answering tab keeps its dialog mounted during a synchronized cancel ha
   await settle(300);
   assert.equal(w.latest.extensionDialog, null);
 });
+
+// ---------------------------------------------------------------------------
+// PR #183 review: what the 404-on-boundary fallback actually covers
+// ---------------------------------------------------------------------------
+
+test("REVIEW #165: a fileless LIVE session already gets an empty boundary, so main dispatches", async () => {
+  resetWorld();
+  // Model the merged server exactly: /api/sessions/<id>/context?boundary=1
+  // answers 200 { entryIds: [] } while a live wrapper owns the session and no
+  // .jsonl exists (aa617860, app/api/sessions/[id]/context/route.ts:72-75).
+  // This is the only state a "prompts were all local slash commands" session is
+  // in while the user is still chatting (the wrapper lives 10 min idle,
+  // IDLE_DESTROY_MS in lib/rpc-manager.ts:54).
+  world.agents.set("fileless-live", { running: true, state: { isStreaming: false, isPromptRunning: false } });
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/sessions/fileless-live/context?boundary=1",
+    produce: async () => ({ status: 200, value: { entryIds: [] } }),
+  });
+  const w = await mountSession("fileless-live");
+  assert.equal(w.latest.loading, false);
+
+  let sendPromise;
+  await act(async () => {
+    sendPromise = w.latest.handleSend("hello after skill");
+    await sleep(30);
+  });
+  const es = lastEs();
+  await act(async () => {
+    es.open();
+    await sendPromise;
+  });
+  assert.equal(
+    callsTo("POST", "/api/agent/fileless-live").some((c) => c.body?.type === "prompt" && c.body?.message === "hello after skill"),
+    true,
+    "unfixed main already dispatches when the live wrapper answers the boundary",
+  );
+  assert.equal(w.latest.notices.length, 0, "no failed-send notice");
+  assert.equal(w.latest.agentRunning, true);
+});
+
+test("REVIEW a vanished session with no wrapper still fails loudly (real failure not swallowed)", async () => {
+  resetWorld();
+  // The real agent route resolves the id against the on-disk file whenever no
+  // wrapper is alive (app/api/agent/[id]/route.ts:64-65), so this 404 is what a
+  // genuinely missing session produces — before the boundary read is reached.
+  world.holds.push({
+    match: (method, url) => method === "POST" && url.includes("/api/agent/gone"),
+    produce: async () => ({ status: 404, value: { error: "Session not found", code: "session_not_found" } }),
+  });
+  const w = await mountSession("gone");
+  let ok;
+  await act(async () => {
+    ok = await w.latest.handleSend("anyone there?");
+    await sleep(30);
+  });
+  assert.equal(ok, false, "the send must not report success");
+  assert.equal(w.latest.agentRunning, false, "the optimistic run state is rolled back");
+  assert.equal(w.latest.notices.length, 1, "the failure is surfaced, not swallowed");
+  assert.equal(w.latest.notices[0].type, "error");
+  assert.equal(
+    callsTo("POST", "/api/agent/gone").some((c) => c.body?.type === "prompt"),
+    false,
+    "no prompt is dispatched into a vanished session",
+  );
+});
+
+test("REVIEW a 404 boundary on a live session (unreadable file / wrapper died) still dispatches", async (t) => {
+  resetWorld();
+  // This is what #183 genuinely buys: #165 deliberately keeps 404 for an
+  // EXISTING but unresolvable file, and a wrapper that dies between the
+  // pre-prompt get_state and the boundary read 404s too. The prompt POST
+  // succeeds in both, so aborting the send here loses the message.
+  world.agents.set("corrupt", { running: true, state: { isStreaming: false, isPromptRunning: false } });
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/sessions/corrupt/context?boundary=1",
+    produce: async () => ({ status: 404, value: { error: "Session file is missing or malformed", code: "session_file_malformed" } }),
+  });
+  const w = await mountSession("corrupt");
+  let sendPromise;
+  await act(async () => {
+    sendPromise = w.latest.handleSend("keep talking");
+    await sleep(30);
+  });
+  const es = lastEs();
+  await act(async () => {
+    es.open();
+    await sendPromise;
+  });
+  assert.equal(
+    callsTo("POST", "/api/agent/corrupt").some((c) => c.body?.type === "prompt" && c.body?.message === "keep talking"),
+    true,
+    "the prompt must be dispatched despite the boundary 404",
+  );
+  assert.equal(w.latest.notices.length, 0, "no failed-send notice");
+  t.diagnostic("boundary 404 tolerated on a live session");
+});
