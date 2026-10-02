@@ -96,20 +96,28 @@ const PLUS_MENU = /More actions|chatInput\.plusMenu/;
 const PASTE_ITEM = /Paste image|chatInput\.pasteImage/;
 const FAILURE = /No image could be pasted|chatInput\.clipboardImageFailed/;
 const SKIPPED = /skipped|chatInput\.attachmentImagesSkipped/;
+// Any notice the composer raises about the batch it was handed.
+const NOTICE = /No image could be pasted|skipped|chatInput\.(clipboardImageFailed|attachmentImagesSkipped)/;
 
 function previews(container) {
   return [...container.querySelectorAll("img")].filter((img) => img.getAttribute("src")?.startsWith("blob:"));
 }
 
-async function pasteFromClipboard(container) {
+async function pasteFromClipboard(
+  container,
+  settled = () => objectUrls.created.length > 0 || NOTICE.test(container.textContent ?? ""),
+) {
   const trigger = screen.getByRole("button", { name: PLUS_MENU });
   await act(async () => { trigger.click(); });
   const item = screen.getByRole("menuitem", { name: PASTE_ITEM });
-  await act(async () => {
-    item.click();
-    // FileReader.readAsDataURL settles on a macrotask; let the batch land.
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  });
+  await act(async () => { item.click(); });
+  // The modeled FileReader settles on a macrotask followed by an async blob
+  // read. The whole suite takes ~125s on the Windows runner, so a fixed sleep
+  // is only long enough on an idle machine; poll for the batch to land instead.
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+    if (settled()) break;
+  }
   return container;
 }
 
