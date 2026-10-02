@@ -773,7 +773,7 @@ test("interrupted message with partial content renders content before interrupte
 
 const FORK_LABEL = "Fork a new session from this point";
 
-test("agent replies offer copy and fork, forking at the turn's user message", async (t) => {
+test("agent replies offer copy and fork at their resolved target", async (t) => {
   const originalMatchMedia = window.matchMedia;
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   t.after(() => {
@@ -784,13 +784,15 @@ test("agent replies offer copy and fork, forking at the turn's user message", as
   const view = render(React.createElement(MessageView, {
     message: { role: "assistant", model: "test", provider: "test", content: [{ type: "text", text: "Done." }] },
     entryId: "assistant-1",
-    // Resolved by resolveForkEntryIds: omp's `branch` accepts a user entry only.
+    // Resolved by resolveForkTargets: the newest reply falls back to its own
+    // turn's prompt with edit-and-resend.
     forkEntryId: "user-1",
-    onFork: (entryId) => forked.push(entryId),
+    forkEditsPrompt: true,
+    onFork: (entryId, editPrompt) => forked.push([entryId, editPrompt]),
   }));
   assert.ok(view.getByRole("button", { name: "Copy message" }));
   await act(async () => { fireEvent.click(view.getByRole("button", { name: FORK_LABEL })); });
-  assert.deepEqual(forked, ["user-1"]);
+  assert.deepEqual(forked, [["user-1", true]]);
   view.unmount();
 });
 
@@ -823,7 +825,7 @@ test("a streaming reply and an unforkable row keep no fork action", () => {
   assert.doesNotMatch(noTarget, new RegExp(`aria-label="${FORK_LABEL}"`));
 });
 
-test("user messages still fork at their own entry", async (t) => {
+test("user messages fork at their own entry and edit the prompt", async (t) => {
   const originalMatchMedia = window.matchMedia;
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   t.after(() => {
@@ -835,9 +837,9 @@ test("user messages still fork at their own entry", async (t) => {
     message: { role: "user", content: "Keep this forkable." },
     entryId: "user-7",
     forkEntryId: "user-7",
-    onFork: (entryId) => forked.push(entryId),
+    onFork: (entryId, editPrompt) => forked.push([entryId, editPrompt]),
   }));
   await act(async () => { fireEvent.click(view.getByRole("button", { name: FORK_LABEL })); });
-  assert.deepEqual(forked, ["user-7"]);
+  assert.deepEqual(forked, [["user-7", true]]);
   view.unmount();
 });

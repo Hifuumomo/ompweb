@@ -1952,12 +1952,29 @@ test("forking carries the advisor choice to the child's next native command", as
     match: (method, url) => method === "POST" && url.startsWith("/api/agent/advisor-parent"),
     produce: async () => ({ value: { success: true, data: { newSessionId: "advisor-child" } } }),
   });
-  await act(async () => { await w.latest.handleFork("e0"); });
+  await act(async () => { await w.latest.handleFork("e0", false); });
   assert.deepEqual(forked, ["advisor-child"]);
   assert.equal(localStorage.getItem("omp-advisor-enabled:advisor-child"), "true");
   const { sendAgentCommand } = await jiti.import("@/lib/agent-client");
   await sendAgentCommand("advisor-child", { type: "get_state" });
   assert.ok(world.calls.some((call) => call.url === "/api/agent/advisor-child?advisor=1"));
+});
+
+test("an edit-and-resend fork puts the branched prompt into the child's composer", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  for (const [editPrompt, child] of [[true, "edit-child"], [false, "keep-child"]]) {
+    resetWorld();
+    primeSession("fork-parent", [userMsg("u0", "q")]);
+    const w = await mountSession("fork-parent", undefined, { onSessionForked: () => {} });
+    world.holds.push({
+      match: (method, url) => method === "POST" && url.startsWith("/api/agent/fork-parent"),
+      produce: async () => ({ value: { success: true, data: { newSessionId: child, text: "retry this" } } }),
+    });
+    await act(async () => { await w.latest.handleFork("u0", editPrompt); });
+    assert.equal(getDraft(child)?.value, editPrompt ? "retry this" : undefined);
+    clearDraft(child);
+    w.unmount();
+  }
 });
 
 test("catch-up metadata cannot overwrite a newer live todo snapshot during a run", async () => {
