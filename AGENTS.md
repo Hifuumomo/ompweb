@@ -153,6 +153,15 @@ hooks/
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not.
 - Idle sessions are disposed after a timeout; concurrent `startRpcSession()`
   calls must share a single start promise.
+- Two cleanup backstops, both unref'd so they never hold the event loop:
+  `IDLE_DESTROY_MS` (10 min) and `DISCONNECT_DESTROY_MS`
+  (`OMP_WEB_DISCONNECT_DESTROY_MS`, 2 min, `0` disables). The shorter one only
+  fires once a session has been genuinely abandoned — no `onEvent` listener, no
+  run in flight, no startup handshake, no unanswered `send()`. The last
+  `onEvent` detach *starts* that window rather than exposing the last frame's,
+  so a reload reattaching seconds later does not 409. Both are fed by
+  `resetIdleTimer()`, the single activity choke point for `send()` and every
+  child frame: adding a new call path must route activity through it.
 
 ### Auto-resume after a restart (`lib/session-resume.ts`)
 - Off by default (`autoResumeSessions` in `omp-web-settings.json`). When on,
