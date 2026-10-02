@@ -581,17 +581,47 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       // Start the read in the click gesture: Safari requires user activation.
       const items = await navigator.clipboard.read();
       const files: File[] = [];
+      let oversized = 0;
       for (const item of items) {
         const type = item.types.find((type) => type.startsWith("image/"));
-        if (type) files.push(new File([await item.getType(type)], "clipboard-image", { type }));
+        if (!type) continue;
+        try {
+          const blob = await item.getType(type);
+          // Drop an oversized clipboard image here rather than handing it on.
+          // The picker's Files are lazy and disk-backed; a clipboard entry is
+          // already whole in RAM, so keeping several alive at once would hold
+          // the entire clipboard before any cap had run.
+          if (blob.size > MAX_ATTACHED_IMAGE_BYTES) {
+            oversized += 1;
+            continue;
+          }
+          files.push(new File([blob], "clipboard-image", { type }));
+        } catch {
+          // One entry can disappear between the `types` snapshot and the read
+          // (NotFoundError). Keep whatever the other items yielded.
+        }
       }
       if (revision !== attachmentRevisionRef.current) return;
       if (files.length) processFilesRef.current(files);
-      else setAttachError(t("chatInput.clipboardImageFailed"));
+      else if (oversized) {
+        setAttachError(
+          t("chatInput.attachmentImagesSkipped", {
+            count: oversized,
+            size: formatAttachmentBytes(MAX_ATTACHED_IMAGE_BYTES),
+          }),
+        );
+      } else setAttachError(t("chatInput.clipboardImageFailed"));
     } catch {
       if (revision === attachmentRevisionRef.current) setAttachError(t("chatInput.clipboardImageFailed"));
     }
   }, [t]);
+
+  // The clipboard read API exists only in a secure context, so a plain-http LAN
+  // session (`npm run dev:lan` on http://192.168.x.x) cannot use this at all.
+  // Hide the item rather than offer an entry that can only fail. The plus menu
+  // is never open on the server, so reading navigator here cannot desync.
+  const canReadClipboardImages =
+    typeof navigator !== "undefined" && typeof navigator.clipboard?.read === "function";
 
   const removeImage = useCallback((index: number) => {
     setAttachedImages((prev) => {
@@ -2636,16 +2666,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     <Paperclip size={12} strokeWidth={1.8} style={{ flexShrink: 0 }} aria-hidden="true" />
                     <span style={{ flex: 1 }}>{t("chatInput.attachFile")}</span>
                   </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => void pasteClipboardImage()}
-                    disabled={isStreaming}
-                    style={attachmentMenuItemStyle}
-                  >
-                    <ClipboardPaste size={12} strokeWidth={1.8} style={{ flexShrink: 0 }} aria-hidden="true" />
-                    <span style={{ flex: 1 }}>{t("chatInput.pasteImage")}</span>
-                  </button>
+                  {canReadClipboardImages && (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => void pasteClipboardImage()}
+                      disabled={isStreaming}
+                      title={t("chatInput.pasteImage")}
+                      style={attachmentMenuItemStyle}
+                    >
+                      <ClipboardPaste size={12} strokeWidth={1.8} style={{ flexShrink: 0 }} aria-hidden="true" />
+                      <span style={{ flex: 1 }}>{t("chatInput.pasteImage")}</span>
+                    </button>
+                  )}
                   {onToolPresetChange && (
                     <>
                       <button
