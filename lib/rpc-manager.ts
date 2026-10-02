@@ -6,6 +6,7 @@ import { hasVisibleAssistantContent } from "./assistant-response";
 import { invalidateModelsCache } from "./models-cache";
 import { RpcCommandError, RpcCommandTimeoutError, RpcProcess, type RpcFrame } from "./omp/rpc-process";
 import { readNativeSettings } from "./omp/settings-config";
+import { getAgentEnvOverrides } from "./omp/agent-env";
 import {
   cacheSessionPath,
   invalidateSessionEntriesCache,
@@ -1132,6 +1133,9 @@ export class AgentSessionWrapper {
       this.compacting = false;
       const proc = new RpcProcess({
         cwd: this.cwd,
+        // Re-read per spawn so a restart picks up environment values the user
+        // added in Settings after this session was created (#104).
+        env: getAgentEnvOverrides(),
         extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : "", undefined, this.advisorSpawned, launchConfigForCwd(this.cwd)),
         onExit: (info) => {
           if (this.proc === proc) this.handleProcessExit(info, proc);
@@ -1797,6 +1801,8 @@ export async function startRpcSession(
     const holder: { wrapper?: AgentSessionWrapper } = {};
     const proc = new RpcProcess({
       cwd,
+      // User-configured variables for MCP servers and generated configs (#104).
+      env: getAgentEnvOverrides(),
       extraArgs: buildSessionSpawnArgs(sessionFile, toolNames, advisor === true, launchConfig),
       onExit: (info) => holder.wrapper?.handleProcessExit(info, proc),
     });

@@ -119,6 +119,33 @@ export function planTurnSegments(
 }
 
 /**
+ * True when the tail of the transcript looks mid-run, without asking the owning
+ * process. omp-web receives SSE frames only for runs it spawned itself, so a
+ * session driven by a separate `omp` process had no signal at all and its
+ * in-progress turn was always folded into "Process details" (#136).
+ *
+ * Mid-run has exactly two shapes: a tool result just landed and the agent is
+ * about to continue, or an assistant message ends with a tool call whose result
+ * has not arrived yet. A finished turn ends in text, so it stops counting.
+ */
+export function looksLikeRunningTurn(messages: AgentMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  if (!last) return false;
+  if (last.role === "toolResult") return true;
+  if (last.role !== "assistant") return false;
+  // A failed or cancelled turn is finished however its blocks are shaped.
+  if (last.errorMessage || last.stopReason === "aborted" || last.stopReason === "error") return false;
+  const blocks = getDisplayableAssistantBlocks(last as AssistantMessage);
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    // Whitespace-only text does not close a turn; look past it.
+    if (block.type === "text" && block.text.trim().length === 0) continue;
+    return block.type === "toolCall";
+  }
+  return false;
+}
+
+/**
  * Plan the transcript into lightweight row descriptors WITHOUT creating
  * React elements. O(history) but allocates only small objects.
  */

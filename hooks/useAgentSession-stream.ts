@@ -233,6 +233,15 @@ export const PROMPT_SETTLE_POLL_MS = 600;
 export const PROMPT_SETTLE_MAX_MS = 20_000;
 export const AGENT_STATE_RECONCILE_MS = 15_000;
 export const BASH_STATE_RECONCILE_MS = 1_000;
+// Cadence for re-reading a session that some OTHER `omp` process is running.
+// omp-web owns no wrapper for those, so /api/agent/<id>/events 409s and nothing
+// streams in; the only way their transcript advances is an explicit sync poll.
+// Fast enough to look live, far slower than the SSE path it stands in for.
+export const EXTERNAL_RUN_POLL_MS = 2_000;
+// A tail that stopped growing is not a live foreign run any more (its omp died,
+// or the run was interrupted between a tool call and its result). Stop polling;
+// the cheap heuristic below re-arms the poll if the transcript grows again.
+export const EXTERNAL_RUN_STALE_MS = 60_000;
 // A cold `omp --mode rpc-ui` spawn (extension + skill + LSP discovery) can take
 // far longer than a few seconds, and the SSE route may only answer once the
 // child is ready. Give up only after the child would have timed out anyway
@@ -440,4 +449,26 @@ export function toSlashCommandInfo(command: RpcAvailableSlashCommand): SlashComm
       ? "skill"
       : "prompt";
   return { name: command.name, description: command.description, source };
+}
+
+// omp exposes only the commands its RPC prompt path can actually run. TUI-only
+// ones (`/guided-goal`, `/vibe`, `/budget`, …) never appear in `get_commands`,
+// so the client has no way to run them and sending one lands in the transcript
+// as literal prompt text with no hint that nothing happened (#167).
+//
+// Callers pass the FULL command list — including the builtins that
+// `toSlashCommandInfo` hides from the palette, which are still executed by omp
+// when typed and therefore must not warn. An empty list means the roster has
+// not arrived yet (or failed), in which case saying "unknown" would be a guess.
+export function isUnknownSlashCommand(text: string, knownNames: readonly string[]): boolean {
+  if (knownNames.length === 0) return false;
+  const match = /^\/([A-Za-z][A-Za-z0-9_-]*)/.exec(text.trim());
+  if (!match) return false;
+  const name = match[1].toLowerCase();
+  return !knownNames.some((known) => known.toLowerCase() === name);
+}
+
+/** The bare command word of a prompt that tries to invoke a slash command. */
+export function slashCommandName(text: string): string | null {
+  return /^\/([A-Za-z][A-Za-z0-9_-]*)/.exec(text.trim())?.[1] ?? null;
 }

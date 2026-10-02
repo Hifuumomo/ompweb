@@ -285,6 +285,10 @@ interface CommittedTranscriptProps {
   messageRefs: React.RefObject<(HTMLDivElement | null)[]>;
   isStreaming: boolean;
   sessionBusy: boolean;
+  /** A run started outside this UI looks active from the transcript tail (see
+   *  `looksLikeRunningTurn`). Without it the newest turn of a session driven by
+   *  another `omp` process would always render folded into Process details. */
+  externalRunActive: boolean;
   isNew: boolean;
   forkingEntryId: string | null;
   handleFork: (entryId: string, editPrompt: boolean) => void;
@@ -313,7 +317,7 @@ interface CommittedTranscriptProps {
  * grouping/splitting work at display-frame cadence.
  */
 const CommittedTranscript = memo(function CommittedTranscript({
-  messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, isNew, forkingEntryId,
+  messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, externalRunActive, isNew, forkingEntryId,
   handleFork, handleNavigate, handleEditContent, modelNames, messageCwd, onOpenFile, sessionId,
   toolCallsDefaultCollapsed, hideThinkingBlock, visibleCount, nearBottom, sentinelRef, handleLoadMoreClick,
 }: CommittedTranscriptProps) {
@@ -390,7 +394,10 @@ const CommittedTranscript = memo(function CommittedTranscript({
   const rows = useMemo<TranscriptRow[]>(() => planTranscriptRows(messages, { hideThinking: hideThinkingBlock }), [messages, hideThinkingBlock]);
   const isLiveTail = (row: TranscriptRow): boolean => {
     if (row.kind !== "group") return false;
-    return (sessionBusy || isStreaming) && row.endIndex === messages.length && row.userIndex === lastAnchorIdx;
+    // `sessionBusy` only goes true for a run omp-web owns, so a session driven
+    // by another `omp` process would never get a live tail; the transcript-tail
+    // heuristic supplies that missing case.
+    return (sessionBusy || externalRunActive || isStreaming) && row.endIndex === messages.length && row.userIndex === lastAnchorIdx;
   };
 
   // Anchor the render window while the user is reading history: the plain
@@ -516,6 +523,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   const {
     loading, error, messages, entryIds, showPreCompactionHistory, streamState,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, fastModeEnabled, fastModeActive,
+    externalRunActive,
     toolPreset,
     liveModelMeta,
     retryInfo, contextUsage, forkingEntryId,
@@ -1261,6 +1269,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               messageRefs={messageRefs}
               isStreaming={streamState.isStreaming}
               sessionBusy={sessionBusy}
+              externalRunActive={externalRunActive}
               isNew={isNew}
               forkingEntryId={forkingEntryId}
               handleFork={handleFork}

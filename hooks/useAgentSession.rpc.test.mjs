@@ -210,6 +210,7 @@ const { useAgentSession } = await jiti.import("../hooks/useAgentSession.ts");
 const { selectSessionHistory } = await jiti.import("@/lib/session-sync");
 const { publishSessionsChanged } = await jiti.import("@/lib/session-change-bus");
 const { AgentSessionWrapper } = await jiti.import("@/lib/rpc-manager");
+const { isUnknownSlashCommand, slashCommandName } = await jiti.import("@/hooks/useAgentSession-stream");
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -807,6 +808,146 @@ test("promotion acknowledgements after navigation cannot change the newly mounte
         : { steering: ["target"], followUp: [] }, "an unobserved session still records the native result");
     });
   }
+});
+
+// ISSUE #130: Stop must abandon the queue. omp keeps undelivered steers and
+// follow-ups after `abort`, so without an explicit discard the text the user
+// recalled replays itself into the next run.
+test("ISSUE #130 abort clears the queue locally and discards every entry in omp", async () => {
+  resetWorld();
+  primeSession("abort-drain", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-drain", "hello agent");
+  await act(async () => {
+    await w.latest.handleSteer("recalled steer");
+    await w.latest.handleFollowUp("recalled follow-up");
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["recalled steer"], followUp: ["recalled follow-up"] });
+
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] }, "the queue bar empties immediately");
+  assert.deepEqual(w.latest.notices, []);
+  assert.equal(callsTo("POST", "/api/agent/").some((c) => c.body?.type === "abort"), true);
+
+  // Each entry is removed from omp as well: its copy would otherwise be
+  // delivered into the next prompt and shown again.
+  assert.deepEqual(
+    world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body),
+    [
+      { type: "remove_queued_message", message: "recalled steer", queue: "steering" },
+      { type: "remove_queued_message", message: "recalled follow-up", queue: "followUp" },
+    ],
+  );
+  // Persistence must not resurrect the queue on the next mount (an empty queue
+  // drops its sessionStorage record entirely).
+  assert.equal(sessionStorage.getItem("omp-queue-abort-drain"), null);
+  es.close();
+});
+
+test("ISSUE #130 aborting an empty queue sends no removal and reports nothing", async () => {
+  resetWorld();
+  primeSession("abort-empty", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-empty", "hello agent");
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.equal(callsTo("POST", "/api/agent/").some((c) => c.body?.type === "abort"), true);
+  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message"), false);
+  assert.deepEqual(w.latest.notices, []);
+  es.close();
+});
+
+test("ISSUE #130 a failed discard still empties the queue and warns instead of replaying", async () => {
+  resetWorld();
+  primeSession("abort-refused", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-refused", "hello agent");
+  await act(async () => { await w.latest.handleSteer("recalled steer"); });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => ({ status: 400, value: { error: "Unknown RPC command: remove_queued_message" } }),
+  });
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
+  assert.deepEqual(w.latest.notices.map((n) => [n.type, n.message]), [["warning", "The run was stopped, but the agent could not clear its pending messages. They may be delivered after the next reply."]]);
+  es.close();
+});
+
+// ISSUE #130 part 4: the delivery of a queued message is a side effect, not a
+// transcript append. An abort flips `agentRunning` before omp flushes the
+// message it had already taken, and the late `message_end` used to be dropped
+// by the idle guard — leaving the delivered chip in the queue bar forever.
+test("ISSUE #130 a user message_end consumes its queued entry even while idle", async () => {
+  resetWorld();
+  primeSession("late-delivery", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("late-delivery", "hello agent");
+  await act(async () => { await w.latest.handleSteer("delivered steer"); });
+  es.emit({ type: "agent_end", isTerminal: true });
+  await settle();
+  assert.equal(w.latest.agentRunning, false, "the run is over");
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["delivered steer"], followUp: [] }, "the queue itself is unchanged");
+  await act(async () => {
+    es.emit({ type: "message_end", message: userMsg("u1", "delivered steer") }, { persist: false });
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
+  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message"), false, "delivery is not a cancellation");
+  es.close();
+});
+
+// ISSUE #167: omp reports 47 runnable builtins over RPC; `/guided-goal`,
+// `/vibe`, `/budget` and `/goal` are TUI-only and absent from that list, so the
+// client has to name them instead of letting them land as silent prompt text.
+test("ISSUE #167 a command missing from omp's roster is reported, not run silently", () => {
+  const known = ["add-dir", "compact", "model", "todo", "mcp", "session"];
+  assert.equal(isUnknownSlashCommand("/guided-goal", known), true);
+  assert.equal(isUnknownSlashCommand("/guided-goal ship the thing", known), true);
+  assert.equal(isUnknownSlashCommand("/Goal", known), true, "matching is case-insensitive both ways");
+  assert.equal(isUnknownSlashCommand("/todo", known), false);
+  assert.equal(isUnknownSlashCommand("/compact now", known), false);
+  // Builtins are hidden from the palette but still executed by omp.
+  assert.equal(isUnknownSlashCommand("/shake", [...known, "shake"]), false);
+  // No roster yet (or a failed fetch) is not evidence that anything is unknown.
+  assert.equal(isUnknownSlashCommand("/guided-goal", []), false);
+  // Not command-shaped, so never a false alarm on a path, URL or plain prose.
+  for (const text of ["explain /guided-goal", "//host/path", "/1st thing", "plain text", ""]) {
+    assert.equal(isUnknownSlashCommand(text, known), false, text);
+    assert.equal(slashCommandName(text), null, text);
+  }
+  assert.equal(slashCommandName("  /guided-goal ship it  "), "guided-goal");
+  assert.equal(slashCommandName("/todo"), "todo");
+});
+
+test("ISSUE #167 sending a TUI-only command warns once and still delivers the text", async () => {
+  resetWorld();
+  primeSession("tui-only", [userMsg("u0", "loaded question")]);
+  const w = await mountSession("tui-only");
+  // The roster arrives from omp; `/todo` is in it, `/guided-goal` is not.
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "get_commands",
+    produce: () => ({ value: { success: true, data: { commands: [{ name: "todo", description: "todos", source: "builtin" }] } } }),
+  });
+  await act(async () => { await w.latest.loadSlashCommands(); });
+  assert.deepEqual(w.latest.notices, [], "loading the roster is not itself a warning");
+
+  const send = async (text) => {
+    let pending;
+    await act(async () => {
+      pending = w.latest.handleSend(text);
+      await sleep(30); // let the pre-connect get_state POST settle
+    });
+    const es = lastEs();
+    await act(async () => { es.open(); await pending; });
+    return es;
+  };
+
+  let es = await send("/guided-goal ship it");
+  assert.deepEqual(
+    w.latest.notices.map((n) => [n.type, n.message]),
+    [["warning", "/guided-goal is not a command this session can run — it was sent as plain text. TUI-only commands (for example /guided-goal) only work in the omp terminal."]],
+  );
+  assert.equal(callsTo("POST", "/api/agent/").some((c) => c.body?.type === "prompt" && c.body?.message === "/guided-goal ship it"), true, "the text is not blocked");
+
+  es.emit({ type: "agent_end", isTerminal: true });
+  await settle();
+  es = await send("/guided-goal again");
+  assert.equal(w.latest.notices.length, 1, "the same name is not repeated");
+  es.close();
 });
 
 test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal reload", async () => {

@@ -5,10 +5,14 @@ import fs from "fs";
 import path from "path";
 import {
   getAllowedFileRoots,
+  getConfigAgentRoots,
+  isConfigRootDeniedFile,
   isExistingFilePathAllowed,
   isFilePathAllowed,
+  isUnderConfigRoot,
   isWindowsAbsolutePath,
   normalizeSlashes,
+  resolveRequestedFilePath,
 } from "@/lib/file-access";
 import {
   DOCX_PREVIEW_MAX_BYTES,
@@ -79,6 +83,21 @@ function filePathFromSegments(segments: string[]): string {
   return "/" + joined.replace(/^\/+/, "");
 }
 
+/**
+ * The catch-all param never carries a leading slash, so an absolute request is
+ * indistinguishable from a relative one once it is joined — `filePathFromSegments`
+ * guesses absolute by prefixing `/`, which is right for every real browse and
+ * wrong for the bare workspace paths `MarkdownBody` linkifies (#135). Try the
+ * absolute reading first and, only when no allowed root authorizes it, fan the
+ * request out over the roots. Writes deliberately skip this (see
+ * `getUploadDirectory`): a relative upload path must not select the target dir.
+ */
+function resolveReadFilePath(segments: string[], allowedRoots: Set<string>): string {
+  const absolutePath = filePathFromSegments(segments);
+  if (isFilePathAllowed(absolutePath, allowedRoots)) return absolutePath;
+  return resolveRequestedFilePath(segments.join("/"), allowedRoots) ?? absolutePath;
+}
+
 function parseFileRequestType(value: string): FileRequestType | null {
   return FILE_REQUEST_TYPE_SET.has(value) ? (value as FileRequestType) : null;
 }
@@ -86,6 +105,9 @@ function parseFileRequestType(value: string): FileRequestType | null {
 async function getUploadDirectory(segments: string[]): Promise<
   { directory: string } | { response: NextResponse }
 > {
+  // Strictly absolute: unlike the read path this never fans a relative request
+  // out over the allowed roots, which would turn "pick me a directory" into
+  // "write anywhere any allowed root points at" (#135).
   const directory = filePathFromSegments(segments);
   const allowedRoots = await getAllowedFileRoots();
   if (!isFilePathAllowed(directory, allowedRoots)) {
@@ -415,7 +437,6 @@ export async function GET(
 ) {
   try {
     const { path: segments } = await params;
-    const filePath = filePathFromSegments(segments);
     const rawType = request.nextUrl.searchParams.get("type") ?? "list";
     const type = parseFileRequestType(rawType);
     if (!type) {
@@ -424,6 +445,16 @@ export async function GET(
     const sessionId = request.nextUrl.searchParams.get("sessionId");
 
     const allowedRoots = await getAllowedFileRoots();
+    const filePath = resolveReadFilePath(segments, allowedRoots);
+    // Making the omp config root readable (so `~/.agents/AGENTS.md` and
+    // `~/.omp/AGENTS.md` open in the viewer, #135) also puts omp's credential
+    // store inside an allowed root. Deny those by name before anything can
+    // stat, read or download them. Only paths outside the config roots are
+    // exempt, so a workspace that happens to hold an `agent.db` still opens.
+    const configAgentRoots = getConfigAgentRoots();
+    if (isUnderConfigRoot(filePath, configAgentRoots) && isConfigRootDeniedFile(filePath)) {
+      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403 });
+    }
     const allowedByRoot = isFilePathAllowed(filePath, allowedRoots);
     const allowedBySessionReference =
       !allowedByRoot &&

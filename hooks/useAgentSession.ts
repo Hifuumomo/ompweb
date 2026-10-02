@@ -20,6 +20,7 @@ import { setDraft } from "@/lib/draft-store";
 import { formatExitedSessionNotice, translate } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { createMessageUpdateCoalescer, type MessageUpdateCoalescer } from "@/lib/message-update-coalescer";
+import { looksLikeRunningTurn } from "@/lib/chat-transcript-plan";
 import { createReconcileGuard, type ReconcileGuard } from "@/lib/reconcile-guard";
 import { getToolNamesForPreset, type ToolPreset } from "@/lib/tool-presets";
 import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-preset-preference";
@@ -75,6 +76,8 @@ import {
   EVENT_STREAM_RETRY_MAX_MS,
   EVENT_STREAM_RETRY_MIN_MS,
   EVENT_STREAM_SLOW_CONNECT_MS,
+  EXTERNAL_RUN_POLL_MS,
+  EXTERNAL_RUN_STALE_MS,
   PROGRAMMATIC_SCROLL_IGNORE_MS,
   PROMPT_SETTLE_INITIAL_DELAY_MS,
   PROMPT_SETTLE_MAX_MS,
@@ -95,6 +98,8 @@ import {
   pruneSubagentIdMap,
   readCompactResult,
   streamReducer,
+  isUnknownSlashCommand,
+  slashCommandName,
   toSlashCommandInfo,
   toThinkingModelMeta,
 } from "./useAgentSession-stream";
@@ -263,6 +268,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [liveToolResults, setLiveToolResults] = useState<Map<string, ToolResultMessage>>(() => new Map());
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
+  // Every command omp reported, builtins included — the palette hides those,
+  // but the unknown-command warning must not flag them (#167). Ref-only: it is
+  // consulted at send time and must never re-render the composer.
+  const knownSlashCommandNamesRef = useRef<string[]>([]);
+  const warnedSlashCommandsRef = useRef(new Set<string>());
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
@@ -966,12 +976,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current ?? await ensureNewSession();
     if (!sid) {
       setSlashCommands([]);
+      knownSlashCommandNamesRef.current = [];
       return [] as SlashCommandInfo[];
     }
     setSlashCommandsLoading(true);
     try {
       const data = await sendAgentCommand<SlashCommandsResponse>(sid, { type: "get_commands" });
-      const commands = (data?.commands ?? [])
+      const available = Array.isArray(data?.commands) ? data.commands : [];
+      // Keep the builtins too: they are hidden from the palette but omp still
+      // runs them when typed, so they must not be reported as unknown (#167).
+      // A reply carrying no list is not evidence that nothing is known, so it
+      // must not erase a roster an earlier reply did supply.
+      if (available.length > 0) knownSlashCommandNamesRef.current = available.map((command) => command.name);
+      const commands = available
         .map(toSlashCommandInfo)
         .filter((c): c is SlashCommandInfo => c !== null);
       setSlashCommands(commands);
@@ -979,6 +996,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to load slash commands:", e);
       setSlashCommands([]);
+      knownSlashCommandNamesRef.current = [];
       return [] as SlashCommandInfo[];
     } finally {
       setSlashCommandsLoading(false);
@@ -1682,6 +1700,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
   }, [agentRunning, catchUp, reconcileAgentState]);
 
+  // A session can be mid-run without omp-web owning the process (someone is
+  // driving it from a terminal, or from another omp-web window). Nothing
+  // streams in that case, so derive activity from the transcript tail and poll
+  // the sync endpoint for the duration — otherwise the current turn sits folded
+  // and frozen while the agent works (#136).
+  const externalRunActive = useMemo(
+    () => !agentRunning && !bashRunning && looksLikeRunningTurn(messages),
+    [agentRunning, bashRunning, messages],
+  );
+  // Wall-clock of the last transcript change; bounds the poll so a permanently
+  // "awaiting a tool result" tail (crashed foreign omp, interrupted run) does
+  // not re-read the session file forever.
+  const transcriptChangedAtRef = useRef(Date.now());
+  useEffect(() => {
+    transcriptChangedAtRef.current = Date.now();
+  }, [messages]);
+  useEffect(() => {
+    if (!externalRunActive) return;
+    const timer = setInterval(() => {
+      const sid = sessionIdRef.current;
+      if (!hookAliveRef.current || !sid) return;
+      if (Date.now() - transcriptChangedAtRef.current >= EXTERNAL_RUN_STALE_MS) return;
+      void catchUp.request();
+    }, EXTERNAL_RUN_POLL_MS);
+    return () => clearInterval(timer);
+  }, [externalRunActive, catchUp]);
+
   // Sample omp's own tokensPerSecond (get_state) at a gauge-friendly cadence
   // while a run is active; the 15s reconcile above is too slow for a gauge.
   // On run end take one trailing sample: omp publishes its final throughput
@@ -2067,6 +2112,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       case "available_commands_update": {
         const commands = (event.commands as RpcAvailableSlashCommand[] | undefined) ?? [];
+        knownSlashCommandNamesRef.current = commands.map((command) => command.name);
         setSlashCommands(commands.map(toSlashCommandInfo).filter((c): c is SlashCommandInfo => c !== null));
         break;
       }
@@ -2099,11 +2145,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       case "message_end": {
         void catchUp.request();
+        const completed = event.message as AgentMessage | undefined;
+        // Queue delivery is a live side effect, not a transcript append, so it
+        // must not be gated on `agentRunning`: an abort flips that flag before
+        // omp flushes the delivered user message, and skipping the consumption
+        // there left a delivered chip in the queue bar forever (#130).
+        if (completed?.role === "user") {
+          consumeQueuedMessage(extractMessageText(completed as Partial<AgentMessage>));
+        }
         // Same late-event guard: after reconcile finished this run,
         // loadSession already loaded this message from the session file —
         // appending it again would duplicate it.
         if (!agentRunningRef.current) break;
-        const completed = event.message as AgentMessage | undefined;
         const messageError = readAgentError(completed);
         if (messageError) lastRunErrorRef.current = messageError;
         if (completed) {
@@ -2111,10 +2164,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const text = extractMessageText(completed as Partial<AgentMessage>);
           if (text && isQuotaLikeError(text)) lastQuotaErrorRef.current = text.slice(0, 800);
         }
-        if (completed && completed.role === "user") {
-          // Queue delivery is a live side effect; persisted IDs alone commit history.
-          consumeQueuedMessage(extractMessageText(completed));
-        } else if (completed?.role === "custom" && (completed as CustomMessage).customType === "xdev-mount-notice") {
+        if (completed?.role === "custom" && (completed as CustomMessage).customType === "xdev-mount-notice") {
           toast.info("MCP tools updated", describeMcpMountNotice(completed as CustomMessage), { clamp: true });
         } else if (completed) {
           // The advisor model injects its review as a custom message mid-run;
@@ -2489,6 +2539,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (agentRunningRef.current || bashRunningRef.current) return false;
     if (initialHydrationPendingRef.current) return false;
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
+    // omp runs TUI-only commands such as `/guided-goal` nowhere but its own
+    // terminal, so over RPC the text is sent as an ordinary prompt and the turn
+    // looks like it obeyed. Say so once per name instead of staying silent
+    // (#167). The prompt itself is still sent: the roster is not proof that the
+    // command is unavailable, and the user may mean the literal text.
+    if (isSlashCommandPrompt && isUnknownSlashCommand(trimmedMessage, knownSlashCommandNamesRef.current)) {
+      const name = slashCommandName(trimmedMessage);
+      if (name && !warnedSlashCommandsRef.current.has(name)) {
+        warnedSlashCommandsRef.current.add(name);
+        addNotice({ type: "warning", message: translate("agentSession.unknownSlashCommand", { name }) });
+      }
+    }
 
     const isBashCommand = !images?.length && trimmedMessage.startsWith("!");
     if (isBashCommand) {
@@ -2732,6 +2794,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, ensureNewSession, loadSession, opts.chatInputRef, promoteNewSession, session]);
   executeBashRef.current = executeBash;
 
+  // An abort leaves steering/follow-up payloads queued inside the omp child
+  // process, so they would be delivered after the user's next prompt ran — the
+  // exact "Stop, resend, and hear it again" report in #130. omp exposes no
+  // clear_queue command (see UNSUPPORTED_COMMANDS in lib/rpc-manager.ts), so
+  // per-entry remove_queued_message is the only drain primitive available.
+  // Best-effort by design: a lost session or a rejected removal must not make
+  // Stop fail.
+  const discardQueuedMessages = useCallback(async (sid: string, queue: QueuedMessages): Promise<void> => {
+    const entries: { text: string; queue: keyof QueuedMessages }[] = [
+      ...queue.steering.map((text) => ({ text, queue: "steering" as const })),
+      ...queue.followUp.map((text) => ({ text, queue: "followUp" as const })),
+    ];
+    if (entries.length === 0) return;
+    let failed = false;
+    await Promise.all(entries.map(async (entry) => {
+      try {
+        await sendAgentCommand(sid, { type: "remove_queued_message", message: entry.text, queue: entry.queue });
+      } catch (error) {
+        console.error("Failed to discard queued message:", error);
+        failed = true;
+      }
+    }));
+    if (failed && hookAliveRef.current && sessionIdRef.current === sid) {
+      addNotice({ type: "warning", message: translate("agentSession.queueDiscardFailed") });
+    }
+  }, [addNotice]);
+
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -2743,12 +2832,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       return;
     }
+    // Drop the client mirror first so the queue bar cannot offer a steer that
+    // is about to be discarded, then drain omp's own copy after the abort
+    // lands (draining before it would race the in-flight delivery).
+    const orphaned = queuedMessagesRef.current;
+    const hadQueue = !isEmptyQueue(orphaned);
+    if (hadQueue) {
+      updateQueuedMessages(EMPTY_QUEUE);
+      publishQueueChange(sid, EMPTY_QUEUE);
+      pendingQueuedPromotions.delete(sid);
+      // Let the next get_state snapshot believe a zero queue count.
+      queueMutatedAtRef.current = 0;
+    }
     try {
       await sendAgentCommand(sid, { type: "abort" });
     } catch (e) {
       console.error("Failed to abort:", e);
     }
-  }, []);
+    if (hadQueue) await discardQueuedMessages(sid, orphaned);
+  }, [discardQueuedMessages, updateQueuedMessages]);
 
   // editPrompt: omp's `branch` drops the chosen user prompt from the fork and
   // returns its text — put it in the fork's composer (edit-and-resend).
@@ -3581,6 +3683,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, removeQueuedMessage, promoteQueuedToSteer, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,
+    // True while a run this UI does not own looks active from the transcript
+    // tail; drives the live-tail rendering and the bounded sync poll.
+    externalRunActive,
     liveToolResults,
     // Subscriptions
     handleAgentEventRef,

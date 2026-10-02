@@ -7,9 +7,25 @@ import { isRecord } from "./type-guards";
 export interface WebServerSettings {
   /** Resume sessions that were mid-run when omp-web stopped. */
   autoResumeSessions: boolean;
+  /**
+   * Environment variables merged into the `omp` child process (issue #104).
+   * Stored as a validated record; lib/omp/agent-env.ts owns the policy and
+   * re-checks every name before handing it to a spawn.
+   */
+  agentEnv: Record<string, string>;
 }
 
-const DEFAULTS: WebServerSettings = { autoResumeSessions: false };
+const DEFAULTS: WebServerSettings = { autoResumeSessions: false, agentEnv: {} };
+
+/** String-valued entries only — the allow-list lives in lib/omp/agent-env.ts. */
+function readAgentEnvRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const entries: Array<[string, string]> = [];
+  for (const [name, entry] of Object.entries(value)) {
+    if (typeof entry === "string") entries.push([name, entry]);
+  }
+  return Object.fromEntries(entries);
+}
 
 function settingsPath(): string {
   return resolve(getAgentDir(), "omp-web-settings.json");
@@ -28,7 +44,12 @@ export function loadWebServerSettings(): WebServerSettings {
   try {
     if (existsSync(path)) {
       const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
-      if (isRecord(raw)) settings = { autoResumeSessions: raw.autoResumeSessions === true };
+      if (isRecord(raw)) {
+        settings = {
+          autoResumeSessions: raw.autoResumeSessions === true,
+          agentEnv: readAgentEnvRecord(raw.agentEnv),
+        };
+      }
     }
   } catch {
     // Unreadable settings fall back to the defaults.
