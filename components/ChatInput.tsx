@@ -9,7 +9,7 @@ import { toast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/field";
 import { useDictation } from "@/hooks/useDictation";
 import { toastBtwError } from "@/hooks/useBtw";
-import type { GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
+import type { AnthropicSlowModeState, GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
 import { RecordingDeck } from "./RecordingDeck";
@@ -70,6 +70,33 @@ import { useI18n } from "@/lib/i18n";
 import { selectableThinkingLevels } from "@/lib/thinking-levels";
 import type { ToolPreset } from "@/lib/tool-presets";
 
+const SLOW_MODE_SAME_DAY_MS = 20 * 3_600_000;
+
+function formatSlowModeResetClock(resetsAtSec: number, now: number): string {
+  const date = new Date(resetsAtSec * 1000);
+  return resetsAtSec * 1000 - now > SLOW_MODE_SAME_DAY_MS
+    ? date.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatAnthropicSlowModeLabel(
+  state: AnthropicSlowModeState,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  now = Date.now(),
+): string {
+  if (state.stage === "low_priority") {
+    const time = formatSlowModeResetClock(state.resetsAtSec, now);
+    return state.allowanceLeftPercent === undefined
+      ? t("chatInput.slowMode.lowPriority", { time })
+      : t("chatInput.slowMode.lowPriorityAllowance", { time, percent: state.allowanceLeftPercent });
+  }
+  if (state.extraUsage) return t("chatInput.slowMode.wrapUpExtraUsage");
+  if (state.resetsAtSec === undefined) return t("chatInput.slowMode.wrapUp");
+  return t("chatInput.slowMode.wrapUpReset", {
+    time: formatSlowModeResetClock(state.resetsAtSec, now),
+  });
+}
+
 export type { AttachedImage, AttachedTextFile } from "./ChatInput-draft-attachments";
 export { filterModelOptions } from "./ChatInput-model-options";
 export { ModelErrorBanner } from "./ChatInput-banners";
@@ -99,6 +126,8 @@ interface Props {
   onModelChange?: (provider: string, modelId: string) => void;
   fastModeEnabled?: boolean;
   fastModeActive?: boolean;
+  /** omp's structured Claude usage-limit state, shown as a warning chip. */
+  anthropicSlowMode?: AnthropicSlowModeState;
   fastModeSupported?: boolean;
   onFastModeChange?: (enabled: boolean) => void;
   onAbortCompaction?: () => void;
@@ -243,7 +272,7 @@ function menuDropStyle(placement: MenuPlacement, maxHeight: number | null): Reac
 
 
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, fastModeSupported, onFastModeChange,
+  onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, anthropicSlowMode, fastModeSupported, onFastModeChange,
   onAbortCompaction, isCompacting, compactResult,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap, modelNameOverride,
   toolPreset, onToolPresetChange,
@@ -302,6 +331,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     items[next]?.focus();
   }, []);
   const { t, tn, locale } = useI18n();
+  const anthropicSlowModeLabel = anthropicSlowMode
+    ? formatAnthropicSlowModeLabel(anthropicSlowMode, t)
+    : undefined;
   const modelCollator = React.useMemo(
     () => new Intl.Collator(locale, { numeric: true, sensitivity: "base" }),
     [locale],
@@ -3014,6 +3046,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 </svg>
                 <span>{t("chatInput.fastLabel")}</span>
               </button>
+            )}
+
+            {/* Claude usage-limit stage (wrap-up allowance or /slow low
+                priority), warning-colored like the TUI status line so
+                past-the-limit service is never mistaken for normal.
+                Layout lives in globals.css (own row on mobile). */}
+            {anthropicSlowModeLabel && (
+              <div className="composer-slow-mode-badge" title={anthropicSlowModeLabel}>
+                {anthropicSlowModeLabel}
+              </div>
             )}
 
             <div className="composer-toolbar-spacer" style={{ marginLeft: "auto" }} />

@@ -2696,6 +2696,38 @@ test("selective hydration preserves newer queued tokens and per-tool progress wh
   assert.equal(w.latest.liveToolResults.get("missed-tool")?.content[0].text, "recovered missed output");
 });
 
+const SLOW_MODEL = { provider: "anthropic", id: "claude-test" };
+const SLOW_STATE = { stage: "low_priority", resetsAtSec: 1770000000, allowanceLeftPercent: 62 };
+
+test("opening a session past its Claude usage limit shows the badge, and an idle /slow off clears it", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, anthropicSlowMode: SLOW_STATE } });
+  const w = await mountSession("s1");
+  assert.deepEqual(w.latest.anthropicSlowMode, SLOW_STATE);
+
+  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL } });
+  await act(async () => { lastEs().emit({ type: "prompt_result", agentInvoked: false }); });
+  await settle();
+  assert.equal(w.latest.anthropicSlowMode, undefined);
+});
+
+test("the usage-limit badge appears mid-run and clears when the run ends without it", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun("s1");
+  world.agents.set("s1", { running: true, state: { isStreaming: true, model: SLOW_MODEL, anthropicSlowMode: SLOW_STATE } });
+  // The in-run sample ticks every 2s; wait for it rather than a fixed sleep.
+  for (let waited = 0; w.latest.anthropicSlowMode !== SLOW_STATE && waited < 5000; waited += 250) await settle(250);
+  assert.deepEqual(w.latest.anthropicSlowMode, SLOW_STATE);
+
+  saveSession("s1", [userMsg("u0", "q"), assistantMsg("a1", "done")]);
+  world.agents.set("s1", { running: false, state: { model: SLOW_MODEL } });
+  await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.equal(w.latest.anthropicSlowMode, undefined);
+});
+
 test("HTTP discovery of a new wrapper replaces an old still-open stream before hydrating it", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);

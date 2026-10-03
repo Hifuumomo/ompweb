@@ -1954,6 +1954,22 @@ pre, code {
   min-width: 24px !important;
   max-width: 100px;
 }
+.composer-slow-mode-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 260px;
+  height: var(--control-height-sm);
+  line-height: var(--control-height-sm);
+  padding: 0 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  color: var(--status-warning);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .composer-primary-action {
   flex-shrink: 0;
   min-width: 7em;
@@ -2044,6 +2060,8 @@ pre, code {
   .composer-toolbar { flex-wrap: wrap !important; row-gap: 6px; }
   .composer-toolbar-spacer { display: none; }
   .composer-primary-action { margin-left: auto; }
+  /* Own row above the controls, so it never squeezes the model picker. */
+  .composer-slow-mode-badge { order: -1; flex-basis: 100%; max-width: none; }
 
   .sidebar-icon-button,
   .sidebar-project-action,
