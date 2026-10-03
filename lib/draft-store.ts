@@ -16,11 +16,25 @@ export interface ChatDraft {
   files: ChatDraftFile[];
 }
 
+/** Text to put back in a composer. `replace` merges a later recovery with an
+ *  earlier one in order: while the draft still starts with `lead` (the earlier
+ *  block), it becomes `text`; otherwise only `fallback` is prepended. */
+export interface DraftRecovery {
+  text: string;
+  replace?: { lead: string; fallback: string };
+}
+
+export function mergeRecoveredText(current: string, { text, replace }: DraftRecovery): string {
+  if (replace && current.startsWith(replace.lead)) return text + current.slice(replace.lead.length);
+  const lead = replace ? replace.fallback : text;
+  return current ? `${lead}\n\n${current}` : lead;
+}
+
 // globalThis so dev Fast Refresh doesn't wipe drafts mid-typing.
 declare global {
   var __ompChatDrafts: Map<string, ChatDraft> | undefined;
   var __ompChatDraftListeners: Set<() => void> | undefined;
-  var __ompChatDraftRecoveryListeners: Set<(key: string, text: string) => void> | undefined;
+  var __ompChatDraftRecoveryListeners: Set<(key: string, recovery: DraftRecovery) => void> | undefined;
 }
 
 const MAX_DRAFTS = 50;
@@ -52,7 +66,7 @@ function readStoredDrafts(): Map<string, ChatDraft> {
 }
 
 const listeners = (globalThis.__ompChatDraftListeners ??= new Set<() => void>());
-const recoveryListeners = (globalThis.__ompChatDraftRecoveryListeners ??= new Set<(key: string, text: string) => void>());
+const recoveryListeners = (globalThis.__ompChatDraftRecoveryListeners ??= new Set<(key: string, recovery: DraftRecovery) => void>());
 
 export function hasUnsentDrafts(): boolean {
   return drafts.size > 0;
@@ -63,7 +77,7 @@ export function subscribeDrafts(listener: () => void): () => void {
   return () => { listeners.delete(listener); };
 }
 
-export function subscribeDraftRecovery(listener: (key: string, text: string) => void): () => void {
+export function subscribeDraftRecovery(listener: (key: string, recovery: DraftRecovery) => void): () => void {
   recoveryListeners.add(listener);
   return () => { recoveryListeners.delete(listener); };
 }
@@ -85,14 +99,15 @@ export function getDraft(key: string): ChatDraft | null {
   return draft ? cloneDraft(draft) : null;
 }
 
-export function recoverDraftText(key: string, text: string): void {
+export function recoverDraftText(key: string, text: string, replace?: DraftRecovery["replace"]): void {
+  const recovery = { text, replace };
   if (key) {
     const draft = getDraft(key) ?? { value: "", images: [], files: [] };
-    setDraft(key, { ...draft, value: draft.value ? `${text}\n\n${draft.value}` : text });
+    setDraft(key, { ...draft, value: mergeRecoveredText(draft.value, recovery) });
   }
   // Publish the recovery intent separately: ordinary persistence must not
   // reapply it, and the mounted composer may have React updates still queued.
-  for (const listener of recoveryListeners) listener(key, text);
+  for (const listener of recoveryListeners) listener(key, recovery);
 }
 
 export function getDraftSummary(key: string): { text: string; hasAttachments: boolean } {

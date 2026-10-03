@@ -308,8 +308,8 @@ const assistantMsg = (id, text) => ({
 });
 
 /** Mount + hydrate, then send a prompt and open the stream. Returns the ES. */
-async function startRun(sid, message, strictMode = false) {
-  const w = await mountSession(sid, undefined, {}, strictMode);
+async function startRun(sid, message, strictMode = false, options = {}) {
+  const w = await mountSession(sid, undefined, options, strictMode);
   assert.equal(w.latest.loading, false, "hydration must complete");
   assert.equal(w.latest.agentRunning, false);
 
@@ -333,129 +333,489 @@ async function startRun(sid, message, strictMode = false) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-for (const queue of ["steering", "followUp"]) {
-  test(`queued cancellation waits for acknowledgement and removes one ${queue} duplicate`, async () => {
-    resetWorld();
-    primeSession("cancellation", [userMsg("u0", "q")]);
-    const w = await mountSession("cancellation", undefined, {}, true);
-    await act(async () => {
-      await w.latest.handleSteer("target");
-      await w.latest.handleFollowUp("target");
-      await w.latest.handleFollowUp("target");
-    });
-    const before = { steering: ["target"], followUp: ["target", "target"] };
-    let release;
-    const acknowledgement = new Promise((resolve) => { release = resolve; });
-    world.holds.push({
-      match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
-      produce: () => acknowledgement,
-    });
-    let cancellation;
-    await act(async () => { cancellation = w.latest.removeQueuedMessage("target", queue); });
-    assert.deepEqual(w.latest.queuedMessages, before);
-    const sent = world.calls.filter((call) => call.body?.type === "remove_queued_message");
-    assert.deepEqual(sent.map((call) => call.body), [{ type: "remove_queued_message", message: "target", queue }]);
-    await act(async () => {
-      release({ value: { success: true, data: { removed: true } } });
-      assert.equal(await cancellation, true);
-    });
-    assert.deepEqual(w.latest.queuedMessages, {
-      ...before, [queue]: before[queue].slice(1),
-    });
-  });
-}
 
-test("queued cancellation preserves pending messages on refusal and unsupported runtimes", async (t) => {
-  for (const response of [
-    { value: { success: true, data: { removed: false } } },
-    { status: 400, value: { error: "Unknown RPC command: remove_queued_message" } },
+// omp owns the queue. The panel shows its snapshot — on load (get_state, so a
+// reload or another device sees the same chips) and live via queue_update —
+// never a local guess about what the RPC did.
+test("the queue panel shows omp's snapshot on load and follows queue_update, not local sends", async () => {
+  resetWorld();
+  primeSession("queue-snapshot", [userMsg("u0", "q")]);
+  world.agents.set("queue-snapshot", { running: true, state: { queuedMessages: { steering: ["from another device"], followUp: [] } } });
+  const { w, es } = await startRun("queue-snapshot", "run");
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["from another device"], followUp: [] });
+  await act(async () => { await w.latest.handleFollowUp("later"); });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["from another device"], followUp: [] }, "an acknowledged send is not a queue entry yet");
+  await act(() => es.emit({ type: "queue_update", steering: ["from another device"], followUp: ["later"] }));
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["from another device"], followUp: ["later"] });
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["later"] }));
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["later"] });
+});
+
+test("queued cancellation reports omp's answer and leaves the chip to the snapshot", async (t) => {
+  for (const outcome of [
+    { name: "removed", response: { value: { success: true, data: { removed: true } } }, result: true, notices: [] },
+    { name: "not pending", response: { value: { success: true, data: { removed: false } } }, result: false, notices: ["warning"] },
+    { name: "unsupported", response: { status: 400, value: { error: "Unknown RPC command: remove_queued_message" } }, result: false, notices: ["error"] },
   ]) {
-    await t.test(response.status ? "unsupported" : "not pending", async () => {
+    await t.test(outcome.name, async () => {
       resetWorld();
-      primeSession("cancel-failure", [userMsg("u0", "q")]);
-      const w = await mountSession("cancel-failure");
-      await act(async () => { await w.latest.handleFollowUp("target"); });
+      const sid = `cancel-${outcome.name.replace(" ", "-")}`;
+      primeSession(sid, [userMsg("u0", "q")]);
+      const { w, es } = await startRun(sid, "run");
+      await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["target", "target"] }));
+      let release;
       world.holds.push({
         match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
-        produce: async () => response,
+        produce: () => new Promise((resolve) => { release = resolve; }),
       });
-      await act(async () => { assert.equal(await w.latest.removeQueuedMessage("target", "followUp"), false); });
-      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
-      assert.equal(w.latest.notices.length, 1);
+      let first;
+      let second;
+      await act(async () => {
+        first = w.latest.removeQueuedMessage("target", "followUp");
+        second = w.latest.removeQueuedMessage("target", "followUp");
+      });
+      assert.equal(await second, false, "an overlapping click cannot cancel the duplicate");
+      assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body), [
+        { type: "remove_queued_message", message: "target", queue: "followUp" },
+      ]);
+      await act(async () => {
+        release(outcome.response);
+        assert.equal(await first, outcome.result);
+      });
+      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target", "target"] });
+      assert.deepEqual(w.latest.notices.map((n) => n.type), outcome.notices);
     });
   }
 });
 
-test("successful cancellation after unmount still reports success for draft recovery", async () => {
+test("Steer promotes through omp once and reports a refusal", async (t) => {
+  for (const outcome of [
+    { name: "promoted", response: { value: { success: true, data: { promoted: true } } }, notices: [] },
+    { name: "not pending", response: { value: { success: true, data: { promoted: false } } }, notices: ["warning"] },
+  ]) {
+    await t.test(outcome.name, async () => {
+      resetWorld();
+      const sid = `promote-${outcome.name.replace(" ", "-")}`;
+      primeSession(sid, [userMsg("u0", "q")]);
+      const { w, es } = await startRun(sid, "run");
+      await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["target", "target"] }));
+      let release;
+      world.holds.push({
+        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+        produce: () => new Promise((resolve) => { release = resolve; }),
+      });
+      const callsBefore = world.calls.length;
+      let first;
+      await act(async () => {
+        first = w.latest.promoteQueuedToSteer("target");
+        await w.latest.promoteQueuedToSteer("target");
+      });
+      assert.deepEqual(world.calls.slice(callsBefore).map((c) => c.body), [{ type: "promote_queued_message", message: "target" }],
+        "one promotion, never a separate steer");
+      await act(async () => {
+        release(outcome.response);
+        await first;
+      });
+      assert.deepEqual(w.latest.notices.map((n) => n.type), outcome.notices);
+    });
+  }
+});
+
+test("a promotion answered after navigation does not notify the new session", async () => {
   resetWorld();
-  primeSession("cancel-old", [userMsg("u0", "q")]);
-  primeSession("cancel-new", [userMsg("u1", "other")]);
-  const old = await mountSession("cancel-old");
-  await act(async () => { await old.latest.handleFollowUp("target"); });
+  primeSession("old-promotion", [userMsg("u0", "old")]);
+  primeSession("new-promotion", [userMsg("u1", "new")]);
+  const { w: old, es } = await startRun("old-promotion", "run");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["target"] }));
   let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
   world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
-    produce: () => acknowledgement,
+    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
   });
-  let cancellation;
-  await act(async () => { cancellation = old.latest.removeQueuedMessage("target", "followUp"); });
+  let promotion;
+  await act(async () => { promotion = old.latest.promoteQueuedToSteer("target"); });
   old.unmount();
-  const current = await mountSession("cancel-new");
-  await act(async () => { await current.latest.handleFollowUp("target"); });
+  const current = await mountSession("new-promotion");
   await act(async () => {
-    release({ value: { success: true, data: { removed: true } } });
-    assert.equal(await cancellation, true, "the caller must recover text already removed by native");
+    release({ status: 400, value: { error: "Native promotion failed" } });
+    await promotion;
   });
-  assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target"] });
   assert.deepEqual(current.latest.notices, []);
 });
 
-for (const remaining of ["other", "target"]) {
-  test(`cancellation acknowledgement updates a remounted session without removing its ${remaining} remainder`, async () => {
-    resetWorld();
-    const sid = `cancel-remount-${remaining}`;
-    primeSession(sid, [userMsg("u0", "q")]);
-    primeSession("cancel-unrelated", [userMsg("u1", "other session")]);
-    const old = await mountSession(sid);
-    await act(async () => {
-      await old.latest.handleFollowUp("target");
-      await old.latest.handleFollowUp(remaining);
-    });
-    world.agents.set(sid, { running: true, state: { queuedMessageCount: 2, isStreaming: true } });
-    let release;
-    const acknowledgement = new Promise((resolve) => { release = resolve; });
-    world.holds.push({
-      match: (method, url, body) => method === "POST" && url === `/api/agent/${sid}` && body?.type === "remove_queued_message",
-      produce: () => acknowledgement,
-    });
-    let cancellation;
-    await act(async () => { cancellation = old.latest.removeQueuedMessage("target", "followUp"); });
-    old.unmount();
-
-    const current = await mountSession(sid, undefined, {}, true);
-    await act(() => lastEs().open());
-    const observer = await mountSession(sid);
-    await act(() => lastEs().open());
-    const unrelated = await mountSession("cancel-unrelated");
-    await act(async () => { await unrelated.latest.handleFollowUp("target"); });
-    assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target", remaining] });
-    assert.deepEqual(observer.latest.queuedMessages, current.latest.queuedMessages);
-    await act(async () => {
-      // Native still has one pending item, so count-only reconciliation cannot
-      // discover which text was cancelled.
-      world.agents.set(sid, { running: true, state: { queuedMessageCount: 1, isStreaming: true } });
-      release({ value: { success: true, data: { removed: true } } });
-      assert.equal(await cancellation, true);
-    });
-    const after = { steering: [], followUp: [remaining] };
-    assert.deepEqual(current.latest.queuedMessages, after);
-    assert.deepEqual(observer.latest.queuedMessages, after, "subscribers adopt one removal, not one each");
-    assert.deepEqual(JSON.parse(sessionStorage.getItem(`omp-queue-${sid}`)), after);
-    assert.deepEqual(unrelated.latest.queuedMessages, { steering: [], followUp: ["target"] });
-    assert.deepEqual(JSON.parse(sessionStorage.getItem("omp-queue-cancel-unrelated")), unrelated.latest.queuedMessages);
+// Stop must neither lose a queued message nor let omp run it: omp starts a
+// queued steer as soon as an abort lands (#130 saw follow-ups replay after the
+// next reply). Withdraw first, like the TUI's Esc, and hand the text back.
+test("Stop withdraws pending queued messages into the session draft before aborting", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-withdraw");
+  primeSession("abort-withdraw", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-withdraw", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["my steer", "already taken"], followUp: ["my follow-up"] }));
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "already taken",
+    produce: async () => ({ value: { success: true, data: { removed: false } } }),
   });
-}
+  for (const message of ["my steer", "my follow-up"]) {
+    world.holds.push({
+      match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === message,
+      produce: async () => ({ value: { success: true, data: { removed: true } } }),
+    });
+  }
+  await act(async () => { await w.latest.handleAbort(); });
+  const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
+  assert.ok(commands.lastIndexOf("remove_queued_message") < commands.indexOf("abort"), "the queue is withdrawn before the abort lands");
+  assert.equal(getDraft("abort-withdraw")?.value, "my steer\n\nmy follow-up", "a message the model already took stays out of the draft");
+  assert.deepEqual(w.latest.notices, []);
+  clearDraft("abort-withdraw");
+});
+
+test("a slow withdrawal does not hold Stop, and its late answer still recovers the text", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-slow");
+  primeSession("abort-slow", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-slow", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["slow steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await sleep(1700);
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), true, "abort goes out while the removal is still pending");
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(getDraft("abort-slow")?.value, "slow steer");
+  clearDraft("abort-slow");
+});
+
+test("Stop saves confirmed text early and still restores the queue in order", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-mixed");
+  primeSession("abort-mixed", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-mixed", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["first", "second"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "first",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "second",
+    produce: async () => ({ value: { success: true, data: { removed: true } } }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await sleep(1700);
+  assert.equal(getDraft("abort-mixed")?.value, "second", "confirmed text is saved before the stalled request settles");
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(getDraft("abort-mixed")?.value, "first\n\nsecond", "a late confirmation keeps queue order");
+  clearDraft("abort-mixed");
+});
+
+test("Stop withdraws a follow-up that a concurrent promotion already moved to steering", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-promoted");
+  primeSession("abort-promoted", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-promoted", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["promoted"] }));
+  for (const [queue, removed] of [["followUp", false], ["steering", true]]) {
+    world.holds.push({
+      match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.queue === queue,
+      produce: async () => ({ value: { success: true, data: { removed } } }),
+    });
+  }
+  await act(async () => { await w.latest.handleAbort(); });
+  const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
+  assert.ok(commands.lastIndexOf("remove_queued_message") < commands.indexOf("abort"));
+  assert.equal(getDraft("abort-promoted")?.value, "promoted");
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.queue), ["followUp", "steering"]);
+  clearDraft("abort-promoted");
+});
+
+test("a steering message the model already took is not looked for among follow-ups", async () => {
+  resetWorld();
+  primeSession("abort-taken", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-taken", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["taken"], followUp: [] }));
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: async () => ({ value: { success: true, data: { removed: false } } }),
+  });
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.queue), ["steering"]);
+});
+
+test("a cancellation omp confirms after unmount still reports success so Edit can recover the text", async () => {
+  resetWorld();
+  primeSession("cancel-unmount", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("cancel-unmount", "run");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["target"] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let cancellation;
+  await act(async () => { cancellation = w.latest.removeQueuedMessage("target", "followUp"); });
+  w.unmount();
+  release({ value: { success: true, data: { removed: true } } });
+  assert.equal(await cancellation, true);
+});
+
+test("a Stop whose run ended during the withdrawal does not abort the next prompt", async () => {
+  resetWorld();
+  primeSession("abort-fenced", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-fenced", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["late steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("next prompt"); await sleep(30); });
+  await act(async () => { lastEs().open(); await sending; });
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "prompt" && c.body?.message === "next prompt"), true);
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the new prompt keeps running");
+});
+
+test("a delayed Stop does not abort a run another device started after the targeted run ended", async () => {
+  resetWorld();
+  primeSession("abort-remote", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-remote", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["late steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  await act(async () => { es.emit({ type: "agent_start" }); }); // another device's prompt
+  await settle();
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the other device's run keeps going");
+});
+
+test("a delayed Stop spares another device's run even when the targeted run ended with no visible answer", async () => {
+  resetWorld();
+  primeSession("abort-remote-empty", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-remote-empty", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["late steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  // The empty-completion recovery reload stalls, so the hook never renders idle.
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.startsWith("/api/sessions/abort-remote-empty"),
+    produce: () => new Promise(() => {}),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "agent_end", isTerminal: true });
+    es.emit({ type: "agent_start" }); // another device's prompt
+  });
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the other device's run keeps going");
+});
+
+test("the agent_end snapshot clears a stale queue even when the wrapper reports no model", async () => {
+  resetWorld();
+  primeSession("end-no-model", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("end-no-model", "run");
+  await act(() => es.emit({ type: "queue_update", steering: ["missed delivery"], followUp: [] }));
+  // Keep the transcript reload's own state read out of the picture.
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/sessions/end-no-model/state",
+    produce: () => new Promise(() => {}),
+  });
+  world.agents.set("end-no-model", { running: false, state: { queuedMessages: { steering: [], followUp: [] } } });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
+});
+
+test("an older state response cannot overwrite a newer snapshot that arrived first", async () => {
+  resetWorld();
+  primeSession("queue-seq", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("queue-seq", "run");
+  let releaseOlder;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/agent/queue-seq",
+    produce: () => new Promise((resolve) => { releaseOlder = resolve; }),
+  });
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/agent/queue-seq",
+    produce: async () => ({ value: { running: true, state: { queuedMessages: { steering: ["pending"], followUp: [] } } } }),
+  });
+  await act(() => es.open()); // older snapshot request, held
+  await act(() => es.open()); // newer reconnect snapshot, answers first
+  await settle();
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["pending"], followUp: [] });
+  await act(async () => {
+    releaseOlder({ value: { running: true, state: { queuedMessages: { steering: [], followUp: [] } } } });
+    await sleep(20);
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["pending"], followUp: [] }, "the older response must not clear the chip");
+});
+
+test("overlapping Stops share one withdrawal and one abort", async () => {
+  resetWorld();
+  primeSession("abort-twice", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-twice", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["A", "B"], followUp: [] }));
+  await act(async () => { await Promise.all([w.latest.handleAbort(), w.latest.handleAbort()]); });
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.message), ["A", "B"]);
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort").length, 1);
+});
+
+test("a stalled withdrawal from an earlier Stop does not swallow the next run's Stop", async () => {
+  resetWorld();
+  primeSession("abort-next", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-next", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["stalled"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let first;
+  await act(async () => { first = w.latest.handleAbort(); });
+  await sleep(1700); // deadline passed, first abort sent, removal still pending
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+    es.emit({ type: "queue_update", steering: [], followUp: [] });
+  });
+  await settle();
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("next prompt"); await sleep(30); });
+  await act(async () => { lastEs().open(); await sending; });
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort").length, 2, "the new run's Stop sends its own abort");
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await first;
+  });
+});
+
+test("a late follow-up refusal does not remove a same-text steer from a newer run", async () => {
+  resetWorld();
+  primeSession("abort-late-refusal", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-late-refusal", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["same"] }));
+  let refuse;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.queue === "followUp",
+    produce: () => new Promise((resolve) => { refuse = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await sleep(1700);
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+    es.emit({ type: "agent_start" }); // new run that queues its own "same" steer
+  });
+  await act(async () => {
+    refuse({ value: { success: true, data: { removed: false } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message" && c.body.queue === "steering"), false);
+});
+
+test("a state snapshot older than a queue_update is dropped, and opening the stream re-reads the queue", async () => {
+  resetWorld();
+  primeSession("queue-order", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("queue-order", "run");
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/agent/queue-order",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  await act(() => es.open()); // reconnect: subscribe, then snapshot
+  await act(() => es.emit({ type: "queue_update", steering: ["newer"], followUp: [] }));
+  await act(async () => {
+    release({ value: { running: true, state: { queuedMessages: { steering: [], followUp: [] } } } });
+    await sleep(20);
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["newer"], followUp: [] }, "the stale snapshot must not erase a newer chip");
+
+  world.agents.set("queue-order", { running: true, state: { queuedMessages: { steering: ["queued while disconnected"], followUp: [] } } });
+  await act(() => es.open());
+  await settle();
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["queued while disconnected"], followUp: [] });
+});
+
+test("a settled cancellation releases the guard for the next one", async () => {
+  resetWorld();
+  primeSession("cancel-twice", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("cancel-twice", "run");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["one", "two"] }));
+  await act(async () => {
+    await w.latest.removeQueuedMessage("one", "followUp");
+    await w.latest.removeQueuedMessage("two", "followUp");
+  });
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.message), ["one", "two"]);
+});
+
+test("Stop with an empty queue sends no removal; a failed withdrawal still stops and warns", async () => {
+  resetWorld();
+  primeSession("abort-empty", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-empty", "hello agent");
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message"), false);
+  assert.deepEqual(w.latest.notices, []);
+
+  await act(() => es.emit({ type: "queue_update", steering: ["my steer"], followUp: [] }));
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: async () => ({ status: 400, value: { error: "Unknown RPC command: remove_queued_message" } }),
+  });
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort").length, 2);
+  assert.deepEqual(w.latest.notices.map((n) => n.type), ["warning"]);
+});
 
 test("an answered dialog handoff cannot clear the next unanswered request", async () => {
   resetWorld();
@@ -520,380 +880,6 @@ test("a stale local queue action reports that its target is unavailable", async 
   });
   assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
   assert.equal(w.latest.notices.at(-1)?.type, "warning");
-});
-
-
-test("queued promotion waits for native acknowledgement and moves only the first matching follow-up", async () => {
-  resetWorld();
-  primeSession("promotion", [userMsg("u0", "q")]);
-  const w = await mountSession("promotion", undefined, {}, true);
-  await act(async () => {
-    await w.latest.handleSteer("existing steer");
-    await w.latest.handleFollowUp("other");
-    await w.latest.handleFollowUp("target");
-    await w.latest.handleFollowUp("target");
-  });
-  const before = { steering: ["existing steer"], followUp: ["other", "target", "target"] };
-  let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
-  world.holds.push({
-    match: (method, url, body) => method === "POST" && url === "/api/agent/promotion" && body?.type === "promote_queued_message",
-    produce: () => acknowledgement,
-  });
-  const callsBefore = world.calls.length;
-  let promotion;
-  await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
-  assert.deepEqual(w.latest.queuedMessages, before, "pending RPC must not relabel the chip");
-  assert.deepEqual(world.calls.slice(callsBefore), [{
-    method: "POST", url: "/api/agent/promotion", body: { type: "promote_queued_message", message: "target" },
-  }], "promotion must not enqueue a separate steer or follow-up");
-  await act(async () => {
-    release({ value: { success: true, data: { promoted: true } } });
-    await promotion;
-  });
-  assert.deepEqual(w.latest.queuedMessages, {
-    steering: ["existing steer", "target"], followUp: ["other", "target"],
-  });
-  assert.deepEqual(w.latest.notices, []);
-});
-
-test("promotion acknowledgement updates remounted observers and Delete cancels steering only", async () => {
-  resetWorld();
-  const sid = "promotion-remount";
-  primeSession(sid, [userMsg("u0", "q")]);
-  primeSession("promotion-unrelated", [userMsg("u1", "other session")]);
-  const old = await mountSession(sid);
-  await act(async () => {
-    await old.latest.handleFollowUp("target");
-    await old.latest.handleFollowUp("target");
-  });
-  world.agents.set(sid, { running: true, state: { queuedMessageCount: 2, isStreaming: true } });
-  let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
-  world.holds.push({
-    match: (method, url, body) => method === "POST" && url === `/api/agent/${sid}` && body?.type === "promote_queued_message",
-    produce: () => acknowledgement,
-  });
-  let promotion;
-  await act(async () => { promotion = old.latest.promoteQueuedToSteer("target"); });
-  old.unmount();
-
-  const current = await mountSession(sid, undefined, {}, true);
-  await act(() => lastEs().open());
-  const observer = await mountSession(sid);
-  await act(() => lastEs().open());
-  const unrelated = await mountSession("promotion-unrelated");
-  await act(async () => { await unrelated.latest.handleFollowUp("target"); });
-  assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target", "target"] });
-  await act(async () => {
-    release({ value: { success: true, data: { promoted: true } } });
-    await promotion;
-  });
-  const promoted = { steering: ["target"], followUp: ["target"] };
-  assert.deepEqual(current.latest.queuedMessages, promoted);
-  assert.deepEqual(observer.latest.queuedMessages, promoted, "observers adopt one promotion, not one each");
-  assert.deepEqual(JSON.parse(sessionStorage.getItem(`omp-queue-${sid}`)), promoted);
-  assert.deepEqual(unrelated.latest.queuedMessages, { steering: [], followUp: ["target"] });
-  assert.deepEqual(JSON.parse(sessionStorage.getItem("omp-queue-promotion-unrelated")), unrelated.latest.queuedMessages);
-  assert.deepEqual(unrelated.latest.notices, []);
-
-  world.holds.push({
-    match: (method, url, body) => method === "POST" && url === `/api/agent/${sid}` && body?.type === "remove_queued_message" && body?.queue === "steering",
-    produce: async () => ({ value: { success: true, data: { removed: true } } }),
-  });
-  await act(async () => {
-    assert.equal(await current.latest.removeQueuedMessage("target", "steering"), true);
-  });
-  assert.deepEqual(world.calls.filter((call) => call.body?.type === "remove_queued_message").map((call) => call.body), [
-    { type: "remove_queued_message", message: "target", queue: "steering" },
-  ]);
-  const remaining = { steering: [], followUp: ["target"] };
-  assert.deepEqual(current.latest.queuedMessages, remaining);
-  assert.deepEqual(observer.latest.queuedMessages, remaining);
-  assert.deepEqual(JSON.parse(sessionStorage.getItem(`omp-queue-${sid}`)), remaining);
-});
-
-test("remounted delivery before promotion acknowledgement preserves the next duplicate and pending guard", async () => {
-  resetWorld();
-  const sid = "promotion-remount-delivery";
-  primeSession(sid, [userMsg("u0", "q")]);
-  const old = await mountSession(sid);
-  await act(async () => {
-    await old.latest.handleFollowUp("target");
-    await old.latest.handleFollowUp("target");
-  });
-  world.agents.set(sid, { running: true, state: { queuedMessageCount: 2, isStreaming: true } });
-  let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
-  world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-    produce: () => acknowledgement,
-  });
-  let promotion;
-  await act(async () => { promotion = old.latest.promoteQueuedToSteer("target"); });
-  old.unmount();
-  const current = await mountSession(sid, undefined, {}, true);
-  const es = lastEs();
-  await act(() => es.open());
-  await act(async () => {
-    await current.latest.promoteQueuedToSteer("target");
-    assert.equal(await current.latest.removeQueuedMessage("target", "followUp"), false);
-    es.emit({ type: "message_end", message: userMsg("delivered", "target") }, { persist: false });
-    release({ value: { success: true, data: { promoted: true } } });
-    await promotion;
-  });
-  const remaining = { steering: [], followUp: ["target"] };
-  assert.deepEqual(current.latest.queuedMessages, remaining);
-  assert.deepEqual(JSON.parse(sessionStorage.getItem(`omp-queue-${sid}`)), remaining);
-  assert.equal(current.latest.messages.some((message) => message.role === "user" && message.content === "target"), false);
-  await act(async () => {
-    appendEntry(sid, userMsg("delivered", "target"));
-    publishSessionsChanged([sid]);
-  });
-  await settle();
-  assert.equal(current.latest.messages.filter((message) => message.role === "user" && message.content === "target").length, 1);
-  assert.equal(world.calls.filter((call) => call.body?.type === "promote_queued_message").length, 1);
-  assert.equal(world.calls.some((call) => call.body?.type === "remove_queued_message"), false);
-  assert.deepEqual(current.latest.notices, []);
-});
-
-test("queued promotion preserves the follow-up and reports native refusal or rejection", async (t) => {
-  for (const outcome of [
-    { name: "not-found", response: { value: { success: true, data: { promoted: false } } }, noticeType: "warning" },
-    { name: "unsupported", response: { status: 400, value: { error: "Unknown RPC command: promote_queued_message" } }, noticeType: "error" },
-  ]) {
-    await t.test(outcome.name, async () => {
-      resetWorld();
-      primeSession(outcome.name, [userMsg("u0", "q")]);
-      const w = await mountSession(outcome.name);
-      await act(async () => { await w.latest.handleFollowUp("target"); });
-      let release;
-      const acknowledgement = new Promise((resolve) => { release = resolve; });
-      world.holds.push({
-        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-        produce: () => acknowledgement,
-      });
-      let promotion;
-      await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
-      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
-      await act(async () => {
-        release(outcome.response);
-        await promotion;
-      });
-      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
-      assert.equal(w.latest.notices.length, 1);
-      assert.equal(w.latest.notices[0].type, outcome.noticeType);
-      if (outcome.response.value.error) {
-        assert.equal(w.latest.notices[0].message, outcome.response.value.error);
-      }
-
-      // A settled failure releases the overlap guard so a deliberate retry works.
-      world.holds.push({
-        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-        produce: async () => ({ value: { success: true, data: { promoted: true } } }),
-      });
-      await act(async () => { await w.latest.promoteQueuedToSteer("target"); });
-      assert.deepEqual(w.latest.queuedMessages, { steering: ["target"], followUp: [] });
-    });
-  }
-});
-
-test("overlapping same-text promotion clicks send one command and promote one occurrence", async () => {
-  resetWorld();
-  primeSession("double-promotion", [userMsg("u0", "q")]);
-  const w = await mountSession("double-promotion");
-  await act(async () => {
-    await w.latest.handleFollowUp("target");
-    await w.latest.handleFollowUp("target");
-  });
-  let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
-  world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-    produce: () => acknowledgement,
-  });
-  let first;
-  let second;
-  await act(async () => {
-    first = w.latest.promoteQueuedToSteer("target");
-    second = w.latest.promoteQueuedToSteer("target");
-  });
-  assert.equal(world.calls.filter((call) => call.body?.type === "promote_queued_message").length, 1);
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target", "target"] });
-  await act(async () => {
-    release({ value: { success: true, data: { promoted: true } } });
-    await Promise.all([first, second]);
-  });
-  assert.deepEqual(w.latest.queuedMessages, { steering: ["target"], followUp: ["target"] });
-});
-
-test("delivery before promotion acknowledgement does not relabel the next duplicate or resurrect the delivered chip", async () => {
-  resetWorld();
-  primeSession("delivered-promotion", [userMsg("u0", "q")]);
-  const { w, es } = await startRun("delivered-promotion", "run", true);
-  await act(async () => {
-    es.emit({ type: "agent_start" });
-    await w.latest.handleFollowUp("target");
-    await w.latest.handleFollowUp("target");
-  });
-  let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
-  world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-    produce: () => acknowledgement,
-  });
-  let promotion;
-  await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
-  await act(async () => { es.emit({ type: "message_end", message: userMsg("delivered", "target") }); });
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
-  assert.equal(w.latest.messages.filter((message) => message.role === "user" && message.content === "target").length, 1);
-  await act(async () => {
-    release({ value: { success: true, data: { promoted: true } } });
-    await promotion;
-  });
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
-});
-
-test("cancellation cannot race a pending promotion and remove the next duplicate", async () => {
-  resetWorld();
-  primeSession("removed-promotion", [userMsg("u0", "q")]);
-  const w = await mountSession("removed-promotion", undefined, {}, true);
-  await act(async () => {
-    await w.latest.handleFollowUp("target");
-    await w.latest.handleFollowUp("target");
-  });
-  let release;
-  const acknowledgement = new Promise((resolve) => { release = resolve; });
-  world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-    produce: () => acknowledgement,
-  });
-  let promotion;
-  await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
-  await act(async () => {
-    assert.equal(await w.latest.removeQueuedMessage("target", "followUp"), false);
-    release({ value: { success: true, data: { promoted: true } } });
-    await promotion;
-  });
-  assert.deepEqual(w.latest.queuedMessages, { steering: ["target"], followUp: ["target"] });
-  assert.equal(world.calls.some((call) => call.body?.type === "remove_queued_message"), false);
-  assert.deepEqual(w.latest.notices, []);
-});
-
-test("promotion acknowledgements after navigation cannot change the newly mounted session", async (t) => {
-  for (const response of [
-    { value: { success: true, data: { promoted: true } } },
-    { status: 400, value: { error: "Native promotion failed" } },
-  ]) {
-    await t.test(response.status ? "error" : "success", async () => {
-      resetWorld();
-      primeSession("old-promotion", [userMsg("u0", "old")]);
-      primeSession("new-promotion", [userMsg("u1", "new")]);
-      const old = await mountSession("old-promotion");
-      await act(async () => { await old.latest.handleFollowUp("target"); });
-      let release;
-      const acknowledgement = new Promise((resolve) => { release = resolve; });
-      world.holds.push({
-        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
-        produce: () => acknowledgement,
-      });
-      let promotion;
-      await act(async () => { promotion = old.latest.promoteQueuedToSteer("target"); });
-      old.unmount();
-      const current = await mountSession("new-promotion");
-      await act(async () => { await current.latest.handleFollowUp("target"); });
-      await act(async () => {
-        release(response);
-        await promotion;
-      });
-      assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target"] });
-      assert.deepEqual(current.latest.notices, []);
-      assert.equal(world.calls.some((call) => call.url === "/api/agent/new-promotion" && call.body?.type === "promote_queued_message"), false);
-      assert.deepEqual(JSON.parse(sessionStorage.getItem("omp-queue-old-promotion")), response.status
-        ? { steering: [], followUp: ["target"] }
-        : { steering: ["target"], followUp: [] }, "an unobserved session still records the native result");
-    });
-  }
-});
-
-// ISSUE #130: Stop must abandon the queue. omp keeps undelivered steers and
-// follow-ups after `abort`, so without an explicit discard the text the user
-// recalled replays itself into the next run.
-test("ISSUE #130 abort clears the queue locally and discards every entry in omp", async () => {
-  resetWorld();
-  primeSession("abort-drain", [userMsg("u0", "loaded question")]);
-  const { w, es } = await startRun("abort-drain", "hello agent");
-  await act(async () => {
-    await w.latest.handleSteer("recalled steer");
-    await w.latest.handleFollowUp("recalled follow-up");
-  });
-  assert.deepEqual(w.latest.queuedMessages, { steering: ["recalled steer"], followUp: ["recalled follow-up"] });
-
-  await act(async () => { await w.latest.handleAbort(); });
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] }, "the queue bar empties immediately");
-  assert.deepEqual(w.latest.notices, []);
-  assert.equal(callsTo("POST", "/api/agent/").some((c) => c.body?.type === "abort"), true);
-
-  // Each entry is removed from omp as well: its copy would otherwise be
-  // delivered into the next prompt and shown again.
-  assert.deepEqual(
-    world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body),
-    [
-      { type: "remove_queued_message", message: "recalled steer", queue: "steering" },
-      { type: "remove_queued_message", message: "recalled follow-up", queue: "followUp" },
-    ],
-  );
-  // Persistence must not resurrect the queue on the next mount (an empty queue
-  // drops its sessionStorage record entirely).
-  assert.equal(sessionStorage.getItem("omp-queue-abort-drain"), null);
-  es.close();
-});
-
-test("ISSUE #130 aborting an empty queue sends no removal and reports nothing", async () => {
-  resetWorld();
-  primeSession("abort-empty", [userMsg("u0", "loaded question")]);
-  const { w, es } = await startRun("abort-empty", "hello agent");
-  await act(async () => { await w.latest.handleAbort(); });
-  assert.equal(callsTo("POST", "/api/agent/").some((c) => c.body?.type === "abort"), true);
-  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message"), false);
-  assert.deepEqual(w.latest.notices, []);
-  es.close();
-});
-
-test("ISSUE #130 a failed discard still empties the queue and warns instead of replaying", async () => {
-  resetWorld();
-  primeSession("abort-refused", [userMsg("u0", "loaded question")]);
-  const { w, es } = await startRun("abort-refused", "hello agent");
-  await act(async () => { await w.latest.handleSteer("recalled steer"); });
-  world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
-    produce: () => ({ status: 400, value: { error: "Unknown RPC command: remove_queued_message" } }),
-  });
-  await act(async () => { await w.latest.handleAbort(); });
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
-  assert.deepEqual(w.latest.notices.map((n) => [n.type, n.message]), [["warning", "The run was stopped, but the agent could not clear its pending messages. They may be delivered after the next reply."]]);
-  es.close();
-});
-
-// ISSUE #130 part 4: the delivery of a queued message is a side effect, not a
-// transcript append. An abort flips `agentRunning` before omp flushes the
-// message it had already taken, and the late `message_end` used to be dropped
-// by the idle guard — leaving the delivered chip in the queue bar forever.
-test("ISSUE #130 a user message_end consumes its queued entry even while idle", async () => {
-  resetWorld();
-  primeSession("late-delivery", [userMsg("u0", "loaded question")]);
-  const { w, es } = await startRun("late-delivery", "hello agent");
-  await act(async () => { await w.latest.handleSteer("delivered steer"); });
-  es.emit({ type: "agent_end", isTerminal: true });
-  await settle();
-  assert.equal(w.latest.agentRunning, false, "the run is over");
-  assert.deepEqual(w.latest.queuedMessages, { steering: ["delivered steer"], followUp: [] }, "the queue itself is unchanged");
-  await act(async () => {
-    es.emit({ type: "message_end", message: userMsg("u1", "delivered steer") }, { persist: false });
-  });
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
-  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message"), false, "delivery is not a cancellation");
-  es.close();
 });
 
 // ISSUE #167: omp reports 47 runnable builtins over RPC; `/guided-goal`,
@@ -2524,7 +2510,7 @@ test("a late full load cannot overwrite a newly started run", async () => {
   assert.equal(w.latest.agentRunning, true);
 });
 
-test("same-text queued delivery is consumed live and committed only when its distinct ID is saved", async () => {
+test("a same-text queued delivery shows live and commits only when its distinct ID is saved", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
   const { w, es } = await startRun("s1", "same");
@@ -2534,13 +2520,10 @@ test("same-text queued delivery is consumed live and committed only when its dis
     es.emit({ type: "message_end", message: delivered });
   });
   await settle();
-  await act(async () => { await w.latest.handleFollowUp("same"); });
-  assert.deepEqual(w.latest.queuedMessages.followUp, ["same"]);
   await act(async () => {
     es.emit({ type: "message_end", message: delivered }, { persist: false });
   });
   await settle();
-  assert.deepEqual(w.latest.queuedMessages.followUp, []);
   assert.deepEqual(w.latest.messages.map((message) => message.content), ["q", "same"]);
   await act(async () => {
     appendEntry("s1", delivered);

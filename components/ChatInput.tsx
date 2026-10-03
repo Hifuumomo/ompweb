@@ -13,7 +13,7 @@ import type { GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
 import { RecordingDeck } from "./RecordingDeck";
-import { clearDraft, getDraft, recoverDraftText, setDraft, subscribeDraftRecovery } from "@/lib/draft-store";
+import { clearDraft, getDraft, mergeRecoveredText, recoverDraftText, setDraft, subscribeDraftRecovery } from "@/lib/draft-store";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import type { AttachedImage, AttachedTextFile } from "./ChatInput-draft-attachments";
 import {
@@ -705,10 +705,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setAttachedTextFiles(draftFilesToAttachedFiles(draft?.files));
   }, [draftKey]);
 
-  useLayoutEffect(() => subscribeDraftRecovery((key, text) => {
+  useLayoutEffect(() => subscribeDraftRecovery((key, recovery) => {
     if (draftKeyRef.current !== key) return;
+    const { text } = recovery;
     // Merge with pending edits rather than replacing them with a store snapshot.
-    setValue((current) => current ? `${text}\n\n${current}` : text);
+    setValue((current) => mergeRecoveredText(current, recovery));
     setAtQuery(null);
     setHistoryMenuOpen(false);
     requestAnimationFrame(() => {
