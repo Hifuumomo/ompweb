@@ -423,7 +423,7 @@ function AgentEnvSetting() {
 
   return (
     <NativeSetting searchId="agent-env" scope="UI" label={t("settingsConfig.agentEnv")} description={t("settingsConfig.agentEnvDesc")}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%", minWidth: 0 }}>
+      <div className="settings-card-block" style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%", minWidth: 0 }}>
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -446,6 +446,7 @@ function AgentEnvSetting() {
             fontSize: 12,
             lineHeight: 1.45,
             minHeight: 96,
+            fieldSizing: "content",
             resize: "vertical",
             outline: "none",
           }}
