@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/field";
 import { useDictation } from "@/hooks/useDictation";
 import { toastBtwError } from "@/hooks/useBtw";
 import type { AnthropicSlowModeState, GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
+import type { SttAfter } from "@/lib/stt";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
 import { RecordingDeck } from "./RecordingDeck";
@@ -856,11 +857,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     onSend(composedMessage, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     clearInput();
   }, [value, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, rejectsOversizedPrompt, runBuiltinCommand, sendSideQuestion]);
-  /** What happens to the composer after the transcript lands: null inserts it
-   *  for editing; "send" dispatches immediately; "steer"/"followup" queue it
-   *  into the running agent. */
-  type DictationAfterMode = "send" | "steer" | "followup";
-  const dictationAfterRef = useRef<DictationAfterMode | null>(null);
   const {
     isRecording,
     isPaused,
@@ -881,17 +877,26 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     seekPreview: seekPreviewDictation,
     confirmTranscribe: confirmTranscribeDictation,
   } = useDictation({
-    onTranscript: (text) => {
-      const after = dictationAfterRef.current;
-      dictationAfterRef.current = null;
+    scope: draftKey,
+    // `after` comes back with the transcript from the server job, so a send or
+    // queue chosen before a session switch (which remounts this composer) holds.
+    // The run may have started or ended since: queue while the agent runs
+    // (Send becomes a follow-up), send when idle (nothing left to queue behind).
+    onTranscript: (text, after) => {
       const base = valueRef.current;
       const sep = base.length > 0 && !base.endsWith(" ") ? " " : "";
       const finalText = base + sep + text;
       insertTextAtCursor(text);
-      if (after === "send") {
+      if (after && onFollowUp) {
+        // Queued messages are text-only: with attachments in the composer the
+        // queue would refuse it, so keep it here and say why.
+        if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) {
+          toast.info(t("chatInput.dictationKeptWithAttachments"));
+        } else {
+          sendQueued(after === "send" ? "followup" : after, finalText);
+        }
+      } else if (after && !isStreaming) {
         void handleSend(finalText);
-      } else if (after === "steer" || after === "followup") {
-        sendQueued(after, finalText);
       } else {
         toast.success(t("chatInput.dictationSuccess"));
       }
@@ -912,26 +917,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       toast.error(msg);
     },
   });
-  const stopAndInsertDictation = useCallback(() => {
-    dictationAfterRef.current = null;
-    stopDictation();
-  }, [stopDictation]);
-  const stopAndSendDictation = useCallback(() => {
-    dictationAfterRef.current = "send";
-    stopDictation({ immediateSend: true });
-  }, [stopDictation]);
-  const stopAndQueueDictation = useCallback((mode: "steer" | "followup") => {
-    dictationAfterRef.current = mode;
-    stopDictation({ immediateSend: true });
-  }, [stopDictation]);
-  const cancelDictationAndReset = useCallback(() => {
-    dictationAfterRef.current = null;
-    cancelDictation();
-  }, [cancelDictation]);
-  const startFreshDictation = useCallback(() => {
-    dictationAfterRef.current = null;
-    toggleDictation();
-  }, [toggleDictation]);
+  // From the review deck the recorder has already stopped, so finishing with a
+  // send/queue choice transcribes the reviewed recording instead.
+  const stopAndFinishDictation = useCallback((after: SttAfter) => {
+    if (isReviewing) confirmTranscribeDictation({ after });
+    else stopDictation({ after });
+  }, [isReviewing, confirmTranscribeDictation, stopDictation]);
   // While the recording deck replaces the textarea there is no focused input,
   // so Escape/Enter are handled at window level: Escape cancels/discard, Enter
   // retries after an error or converts the recording to text.
@@ -940,7 +931,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        cancelDictationAndReset();
+        cancelDictation();
       } else if (e.key === "Enter" && !e.shiftKey && !isTranscribing) {
         // Let focused deck/toolbar controls keep their own activation;
         // only hijack Enter from the non-interactive page context.
@@ -949,12 +940,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         e.preventDefault();
         if (transcribeError) retryDictation();
         else if (isReviewing) confirmTranscribeDictation();
-        else stopAndInsertDictation();
+        else stopDictation();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isRecording, isPaused, isReviewing, isTranscribing, transcribeError, cancelDictationAndReset, retryDictation, confirmTranscribeDictation, stopAndInsertDictation]);
+  }, [isRecording, isPaused, isReviewing, isTranscribing, transcribeError, cancelDictation, retryDictation, confirmTranscribeDictation, stopDictation]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1433,7 +1424,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       }
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "m") {
         e.preventDefault();
-        startFreshDictation();
+        toggleDictation();
         return;
       }
 
@@ -1580,7 +1571,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
     },
-    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, onMinimize, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, startFreshDictation, wordPrediction]
+    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, onMinimize, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, toggleDictation, wordPrediction]
   );
 
 
@@ -2603,12 +2594,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               previewDuration={previewDuration}
               transcribeError={transcribeError}
               onPauseResume={togglePauseDictation}
-              onConvert={stopAndInsertDictation}
+              onConvert={stopDictation}
               onRetry={retryDictation}
               onPlayPreview={isPlayingPreview ? pausePreviewDictation : playPreviewDictation}
               onSeekPreview={seekPreviewDictation}
               onConfirmTranscribe={confirmTranscribeDictation}
-              onDiscard={cancelDictationAndReset}
+              onDiscard={cancelDictation}
             />
           ) : (
           <div style={{ position: "relative" }}>
@@ -3228,7 +3219,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             {isRecording || isPaused || isReviewing || isTranscribing || transcribeError ? (
               <button
                 type="button"
-                onClick={cancelDictationAndReset}
+                onClick={cancelDictation}
                 title={transcribeError ? t("chatInput.discardDictation") : t("chatInput.cancelDictation")}
                 aria-label={transcribeError ? t("chatInput.discardDictation") : t("chatInput.cancelDictation")}
                 style={{
@@ -3247,7 +3238,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             ) : (
               <button
                 type="button"
-                onClick={startFreshDictation}
+                onClick={toggleDictation}
                 title={t("chatInput.startDictation")}
                 aria-label={t("chatInput.startDictation")}
                 style={{
@@ -3274,7 +3265,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 onClick={() => {
                   if (dictationCapturing) {
                     const behavior = getSubmitDuringRunBehavior();
-                    stopAndQueueDictation(behavior === "steer" && onSteer ? "steer" : "followup");
+                    stopAndFinishDictation(behavior === "steer" && onSteer ? "steer" : "followup");
                   } else {
                     sendQueued("followup");
                   }
@@ -3323,7 +3314,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <button
                 type="button"
                 className="composer-primary-action"
-                onClick={isRecording || isPaused || isReviewing ? stopAndSendDictation : () => void handleSend()}
+                onClick={isRecording || isPaused || isReviewing ? () => stopAndFinishDictation("send") : () => void handleSend()}
                 disabled={isTranscribing || !(isRecording || isPaused || isReviewing || value.trim() || attachedImages.length || attachedTextFiles.length)}
                 title={isRecording || isPaused || isReviewing ? t("chatInput.sendDictation") : t("chatInput.send")}
                 style={{

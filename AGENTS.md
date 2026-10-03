@@ -83,6 +83,9 @@ app/api/
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
+  stt/route.ts                    POST audio (+scope) → 202 { jobId } | GET ?scope= live jobs (lib/stt-jobs.ts)
+  stt/[jobId]/route.ts            GET job state | POST retry with kept audio | DELETE ?claim= claim/discard
+  stt/[jobId]/audio/route.ts      GET the kept recording (audio/* only) for playback
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/
@@ -479,6 +482,36 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
 - Ghost state lives in a small external store (`useSyncExternalStore` in
   `GhostMirror`), not ChatInput state: re-rendering the composer per ghost
   change was the dominant per-keystroke cost.
+
+### Voice transcription jobs (`lib/stt-jobs.ts`, `/api/stt`, `hooks/useDictation.ts`)
+- The browser never waits on the STT endpoint: `POST /api/stt` keeps the
+  recording in memory and starts a job; the hook polls `GET /api/stt/[jobId]`
+  (proxies with ~30s timeouts would otherwise return HTML 504s). Job failures
+  are 200 payloads for the same reason.
+- Jobs carry the composer scope (`draftKey`: session id or `new:<cwd>`). The
+  hook adopts the newest job for its scope on mount, focus, visibility and
+  every 4s while visible and idle, so another browser can play (`/audio`),
+  retry (`POST`) or discard it. Leaving the scope stops following without
+  discarding.
+- A finished job is delivered only by claim:
+  `DELETE ?claim=<instance token>&owner=<tab token>` returns the text to the
+  first claim token (repeatable with the same token); polls never carry text,
+  and other composers see `gone` and stand down silently. A claim on an
+  unfinished job is a no-op; a `DELETE` without `claim` discards and aborts
+  the upstream request.
+- Two tokens, never merged. The tab token (sessionStorage) identifies the
+  job owner: it survives the composer remounting (`AppShell` keys
+  `ChatWindow` by session), gets the 15s first claim, and alone gets the
+  send/queue choice back. A duplicated tab copies it, so exclusivity comes
+  from the claim token, which is per hook instance.
+- The send/queue choice (`after`: send | steer | followup) is uploaded with
+  the recording, kept on the job, and returned with the owner's claim. Never
+  keep it only in component state: a session switch remounts the composer and
+  loses it. A non-owner claim only inserts, since that composer holds its own
+  draft and attachments.
+- Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
+  TTLs; a server restart loses jobs, and the hook then re-uploads its local
+  copy if it has one.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.
