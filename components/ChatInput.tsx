@@ -298,6 +298,14 @@ function menuDropStyle(placement: MenuPlacement, maxHeight: number | null): Reac
 }
 
 
+/** A queued message is text-only: omp refuses attachments in a steer or a
+ *  follow-up, whether or not a run is active. One predicate decides both
+ *  whether `sendQueued` may queue and what a refused dictation tells the user,
+ *  so the rule and its explanation cannot drift apart. */
+export function queueAllowsAttachments(attachedImages: number, attachedTextFiles: number): boolean {
+  return attachedImages === 0 && attachedTextFiles === 0;
+}
+
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, anthropicSlowMode, fastModeSupported, onFastModeChange,
   onAbortCompaction, isCompacting, compactResult,
@@ -890,7 +898,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       if (after && onFollowUp) {
         // Queued messages are text-only: with attachments in the composer the
         // queue would refuse it, so keep it here and say why.
-        if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) {
+        if (!queueAllowsAttachments(attachedImagesRef.current.length, attachedTextFilesRef.current.length)) {
           toast.info(t("chatInput.dictationKeptWithAttachments"));
         } else {
           sendQueued(after === "send" ? "followup" : after, finalText);
@@ -1248,7 +1256,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const msg = raw.trim();
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (sendSideQuestion(msg, overrideText)) return;
-    if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) return;
+    if (!queueAllowsAttachments(attachedImagesRef.current.length, attachedTextFilesRef.current.length)) return;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {

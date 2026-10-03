@@ -195,7 +195,11 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   // request, and the browser only sends short GETs, so proxy idle timeouts
   // never apply. Transient poll failures (network switch, proxy error page
   // during a restart) keep polling until the deadline.
-  const followJob = useCallback(async (jobId: string) => {
+  // `mine` marks the browser that recorded (or retried) this job. Only that
+  // browser has the local audio to fall back on, so only it may report a lost
+  // job as an error; a follower that is locked out of the transcript is
+  // standing down by design.
+  const followJob = useCallback(async (jobId: string, mine = true) => {
     abortControllerRef.current?.abort();
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -238,8 +242,14 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         const job = await res.json().catch(() => null);
         if (stale()) return;
         if (res.status === 404) {
-          // Server restarted or the job expired: only local audio can be retried.
+          // Server restarted, the job expired, or its tombstone was pruned
+          // after another browser took it. Only local audio can be retried,
+          // and only the recording browser has any.
           jobIdRef.current = null;
+          if (!mine) {
+            releaseJob();
+            return;
+          }
           failTranscription(normalizeErrorMessage(job?.error, "Transcription job not found"));
           return;
         }
@@ -348,7 +358,9 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         jobIdRef.current = job.id;
         setTranscribeError(normalizeErrorMessage(job.error, "Transcription failed"));
       } else {
-        void followJob(job.id);
+        // Adopted from the session's job list: another browser recorded this,
+        // so a 404 means it was claimed or pruned — not this browser's failure.
+        void followJob(job.id, false);
       }
     };
     const onVisible = () => void adopt();

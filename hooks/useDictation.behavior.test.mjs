@@ -699,3 +699,32 @@ test("starting a new recording discards the job the deck was showing, for every 
   assert.equal(view.result.current.isRecording, true);
   assert.deepEqual(world.deletes, ["/api/stt/job-1"]);
 });
+
+test("a lost job is an error for the browser that recorded it", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.pollResponses = [{ ok: false, status: 404, json: async () => ({ error: "not found" }) }];
+
+  await recordAndTranscribe(view);
+
+  // Only this browser still holds the audio, so it is the only one that can
+  // say "that failed" and offer a retry.
+  assert.deepEqual(errors, ["not found"]);
+  assert.deepEqual(transcripts, []);
+});
+
+test("a job from another browser that vanishes stands down instead of erroring", async () => {
+  // Adopted from the session's job list, then the server has forgotten it: its
+  // tombstone was pruned, or another browser claimed it. Neither is this
+  // browser's failure, and it has no audio to retry with.
+  world.pollResponses = [{ ok: false, status: 404, json: async () => ({ error: "not found" }) }];
+  const { view, errors } = mountDictation("session-1");
+  await settle(50);
+
+  world.scopeJobs = [{ id: "job-1", status: "pending" }];
+  await waitUntil(() => world.polls >= 1, 6000);
+
+  assert.deepEqual(errors, []);
+  assert.equal(world.polls, 1, "a 404 is final, not a poll until the deadline");
+  assert.equal(view.result.current.isTranscribing, false);
+  assert.equal(view.result.current.transcribeError, null);
+});
