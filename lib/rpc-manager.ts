@@ -1420,9 +1420,8 @@ export class AgentSessionWrapper {
       case "abort_and_restore_queue": {
         this.responseObserved = false;
         this.responseRunActive = false;
-        let result: unknown = null;
-        await this.withFinalRunningNotification(async () => {
-          result = await this.proc.sendCommand({ type });
+        const result = await this.withFinalRunningNotification(async () => {
+          const response: unknown = await this.proc.sendCommand({ type });
           // If the prompt was aborted before the agent loop started, no
           // agent_end will arrive to clear the flag; the streaming flag still
           // tracks a live turn that ends with its own agent_end.
@@ -1435,6 +1434,7 @@ export class AgentSessionWrapper {
           this.awaitingAgentStartDeadline = 0;
           this.continuationGraceUntil = 0;
           this.clearLiveSnapshots();
+          return response;
         });
         return type === "abort" ? null : result ?? null;
       }
