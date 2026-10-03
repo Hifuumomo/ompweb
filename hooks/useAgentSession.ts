@@ -16,6 +16,7 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { hasVisibleAssistantContent } from "@/lib/assistant-response";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
 import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
+import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "@/lib/skill-diagnostics";
 import { recoverDraftText, setDraft } from "@/lib/draft-store";
 import { formatExitedSessionNotice, translate } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
@@ -253,6 +254,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
+  const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnosticsSnapshot | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
@@ -341,6 +343,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     queueAppliedSeqRef.current = seq;
     updateQueuedMessages(readQueueSnapshot(value) ?? EMPTY_QUEUE);
   }, [updateQueuedMessages]);
+  // Orders get_state responses, the setter reply, and SSE updates so a response
+  // started before a newer frame cannot overwrite it.
+  const skillDiagnosticsSeqRef = useRef(0);
+  const skillDiagnosticsAppliedSeqRef = useRef(0);
+  // What the view shows now, for a setter reply that a newer frame overtook.
+  const skillDiagnosticsRef = useRef<SkillDiagnosticsSnapshot | null>(null);
+  const publishSkillDiagnostics = useCallback((seq: number, snapshot: SkillDiagnosticsSnapshot | null) => {
+    skillDiagnosticsAppliedSeqRef.current = seq;
+    skillDiagnosticsRef.current = snapshot;
+    setSkillDiagnostics(snapshot);
+  }, []);
+  const applySkillDiagnosticsSnapshot = useCallback((seq: number, value: unknown) => {
+    if (seq <= skillDiagnosticsAppliedSeqRef.current) return;
+    publishSkillDiagnostics(seq, parseSkillDiagnosticsSnapshot(value) ?? null);
+  }, [publishSkillDiagnostics]);
   const [subagents, setSubagents] = useState<SubagentInfo[]>([]);
   const [subagentEvents, setSubagentEvents] = useState<Record<string, SubagentActivityEvent[]>>({});
   const [subagentTranscriptVersions, setSubagentTranscriptVersions] = useState<Record<string, number>>({});
@@ -741,11 +758,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // must reach the composer so the ladder/active level match reality.
   const refreshLiveModelState = useCallback(async (sid: string) => {
     const token = beginAuthoritativeModelSync();
+    const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
     try {
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
       if (!res.ok) return;
       const agentState = await res.json() as { running: boolean; state?: AgentStateResponse };
-      if (sessionIdRef.current !== sid) return;
+      if (!hookAliveRef.current || sessionIdRef.current !== sid) return;
+      applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, agentState.state?.skillDiagnostics);
       const applied = applyAuthoritativeModel(toThinkingModelMeta(agentState.state?.model), token);
       if (!applied) return; // stale snapshot — drop its thinking level too
       if (agentState.state?.thinkingLevel !== undefined) {
@@ -771,7 +790,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch {
       // Best effort; the next loadSession/reconcile re-syncs.
     }
-  }, [applyAuthoritativeModel, beginAuthoritativeModelSync]);
+  }, [applyAuthoritativeModel, applySkillDiagnosticsSnapshot, beginAuthoritativeModelSync]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, fenceRunId?: number) => {
     const requestSeq = ++contextRequestSeqRef.current;
@@ -836,6 +855,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // sync that started while this request was in flight.
         const token = beginAuthoritativeModelSync();
         const queueRevision = ++queueSeqRef.current;
+        const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
         const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; exited?: ExitedRpcSession };
@@ -852,6 +872,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         const liveState = agentState.state;
+        applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, liveState?.skillDiagnostics);
         const modelApplied = applyAuthoritativeModel(toThinkingModelMeta(liveState?.model), token);
         if (liveState) {
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
@@ -899,7 +920,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Ensure the flag is cleared even if the pre-state early-return path was taken
       if (showLoading && includeState && !messagesLoaded) initialHydrationPendingRef.current = false;
     }
-  }, [catchUp, refreshSubagentHistory, applyAuthoritativeModel, beginAuthoritativeModelSync, applyQueueStateSnapshot]);
+  }, [catchUp, refreshSubagentHistory, applyAuthoritativeModel, beginAuthoritativeModelSync, applyQueueStateSnapshot, applySkillDiagnosticsSnapshot]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null, includePreCompaction = false): Promise<boolean> => {
     const seq = ++contextRequestSeqRef.current;
@@ -952,6 +973,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, [isNew, newSessionCwd, onSessionCreated]);
 
+  // Assigned after connectEvents is defined. A runtime created for an empty
+  // chat emits its startup frames before any stream exists, so it must be
+  // observed (and its state snapshot recovered on stream open) right away.
+  const observeCreatedSessionRef = useRef<((sid: string) => void) | null>(null);
+
   const ensureNewSession = useCallback(async () => {
     if (sessionIdRef.current) return sessionIdRef.current;
     if (!isNew || !newSessionCwd) return sessionIdRef.current;
@@ -986,6 +1012,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } catch {
           // Best-effort: the spawned process already has --advisor.
         }
+      }
+      // A prompt or side question that created this runtime attaches its own stream,
+      // which would only replace an observer attached here.
+      if (hookAliveRef.current && !promptDispatchPendingRef.current && !btwAskPendingRef.current) {
+        observeCreatedSessionRef.current?.(realId);
       }
       return realId;
     })();
@@ -1057,17 +1088,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // below can restore everything the mount flow sets up — not just the stream.
   const reconnectActionsRef = useRef<((sid: string) => void) | null>(null);
 
-  const refreshQueueSnapshot = useCallback(async (sid: string) => {
-    const revision = ++queueSeqRef.current;
+  const refreshAgentSnapshots = useCallback(async (sid: string) => {
+    const queueRevision = ++queueSeqRef.current;
+    const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
     try {
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
-      if (!res.ok || sessionIdRef.current !== sid) return;
+      if (!res.ok || !hookAliveRef.current || sessionIdRef.current !== sid) return;
       const data = await res.json() as { state?: AgentStateResponse };
-      applyQueueStateSnapshot(revision, data.state?.queuedMessages);
+      applyQueueStateSnapshot(queueRevision, data.state?.queuedMessages);
+      applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, data.state?.skillDiagnostics);
     } catch {
-      // The next queue_update or state snapshot heals the panel.
+      // The next live update or state snapshot heals these views.
     }
-  }, [applyQueueStateSnapshot]);
+  }, [applyQueueStateSnapshot, applySkillDiagnosticsSnapshot]);
 
   const connectEvents = useCallback((sid: string, restoreWrapper = false): Promise<EventStreamConnectionResult> => {
     // A backoff timer from an earlier CLOSED stream may still be pending (e.g.
@@ -1114,9 +1147,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // Side questions: omp re-reads the persisted history on stream open, so
         // a snapshot here catches topics asked in the terminal or another tab.
         void refreshBtwHistory(sid);
-        // Subscribe, then snapshot: omp does not replay queue_update frames
-        // emitted before this stream opened (it coalesces against the last).
-        void refreshQueueSnapshot(sid);
+        // Subscribe, then snapshot: OMP does not replay queue or diagnostics
+        // updates emitted before this stream opened.
+        void refreshAgentSnapshots(sid);
       };
 
       es.onmessage = (e) => {
@@ -1188,7 +1221,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // connection must be ready before they continue.
       };
     });
-}, [applyBtwFrame, catchUp, clearLiveToolResults, eventCoalescer, refreshBtwHistory, refreshQueueSnapshot]);
+}, [applyBtwFrame, catchUp, clearLiveToolResults, eventCoalescer, refreshBtwHistory, refreshAgentSnapshots]);
+  observeCreatedSessionRef.current = (sid: string) => {
+    if (!hookAliveRef.current || sessionIdRef.current !== sid || eventSourceRef.current) return;
+    void connectEvents(sid);
+  };
 
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server
@@ -1673,6 +1710,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (token === null) return;
     try {
       const queueRevision = ++queueSeqRef.current;
+      const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
       if (!res.ok) return;
       const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
@@ -1682,6 +1720,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!hookAliveRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== runId
         || responseRunVersionRef.current !== responseVersion) return;
       const state = data.state;
+      applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, state?.skillDiagnostics);
       if (!promptDispatchPendingRef.current && state?.responseObserved) runHadContentRef.current = true;
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
@@ -1721,7 +1760,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void reconcileAgentState(sid);
       }
     }
-  }, [applyQueueStateSnapshot, finishPromptWithoutStream, refreshSubagentRoster]);
+  }, [applyQueueStateSnapshot, applySkillDiagnosticsSnapshot, finishPromptWithoutStream, refreshSubagentRoster]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -1893,6 +1932,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case "skill_diagnostics_update": {
+        const revision = ++skillDiagnosticsSeqRef.current;
+        applySkillDiagnosticsSnapshot(revision, event.data);
+        break;
+      }
       case "queue_update": {
         const snapshot = readQueueSnapshot(event);
         if (snapshot) {
@@ -1989,15 +2033,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           void loadSession(endedSid, false, false, endedRunId);
           const endToken = beginAuthoritativeModelSync();
           const queueRevision = ++queueSeqRef.current;
+          const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
           fetch(`/api/agent/${encodeURIComponent(endedSid)}`)
             .then((r) => (r.ok ? r.json() as Promise<{ state?: AgentStateResponse }> : null))
             .then((d) => {
               // Stale terminal snapshot: the user switched sessions or started
               // the next run while this request was in flight — drop it.
-              if (!d || sessionIdRef.current !== endedSid || promptRunIdRef.current !== endedRunId) return;
+              if (!d || !hookAliveRef.current || sessionIdRef.current !== endedSid || promptRunIdRef.current !== endedRunId) return;
               // The queue does not depend on a model: an exited wrapper still
               // means nothing is queued.
               applyQueueStateSnapshot(queueRevision, d.state?.queuedMessages);
+              applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, d.state?.skillDiagnostics);
               if (!d.state?.model) return;
               const applied = applyAuthoritativeModel(toThinkingModelMeta(d.state.model), endToken);
               if (!applied) return; // stale snapshot — drop everything derived from it
@@ -2465,7 +2511,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-}, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages, applyQueueStateSnapshot]);
+}, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, applySkillDiagnosticsSnapshot, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages, applyQueueStateSnapshot]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
     metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
@@ -3093,6 +3139,27 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice]);
 
+  const setSkillStartupDiagnostics = useCallback(async (enabled: boolean): Promise<SkillDiagnosticsSnapshot> => {
+    if (typeof enabled !== "boolean") throw new Error("Skill startup diagnostics enabled must be a boolean");
+    const sid = sessionIdRef.current;
+    if (!sid) throw new Error("Skill diagnostics require an active session");
+    const revision = ++skillDiagnosticsSeqRef.current;
+    const result = await sendAgentCommand<unknown>(sid, { type: "set_skill_startup_diagnostics", enabled });
+    if (!hookAliveRef.current || sessionIdRef.current !== sid) throw new Error("Skill diagnostics request became stale");
+    const snapshot = parseSkillDiagnosticsSnapshot(result);
+    if (!snapshot) throw new Error("Skill diagnostics are unavailable for this session");
+    // OMP emits its update frame before answering, so a newer frame or snapshot can
+    // already own the view. The setting was still saved: report what is current
+    // instead of failing, and never roll the view back to this older reply.
+    if (revision <= skillDiagnosticsAppliedSeqRef.current) {
+      const current = skillDiagnosticsRef.current;
+      if (!current) throw new Error("Skill diagnostics are unavailable for this session");
+      return current;
+    }
+    publishSkillDiagnostics(revision, snapshot);
+    return snapshot;
+  }, [publishSkillDiagnostics]);
+
   /** Change how steering interrupts the running agent (immediate vs wait). */
   const handleInterruptModeChange = useCallback(async (mode: "immediate" | "wait") => {
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
@@ -3312,9 +3379,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
 
     try {
-      const sid = sessionIdRef.current ?? await ensureNewSession();
+      // Commands that talk to the runtime create it here. /btw <question> and the web
+      // prompt commands create it inside askBtw/handleSend, which attach their own stream.
+      const ensureRuntime = async () => sessionIdRef.current ?? await ensureNewSession();
       switch (commandName) {
         case "compact": {
+          const sid = await ensureRuntime();
           if (!sid || isCompactingRef.current || isCompacting) return complete({ handled: true, error: translate("agentSession.noSessionToCompact") });
           isCompactingRef.current = true;
           setIsCompacting(true);
@@ -3336,6 +3406,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "reload": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToReload") });
           await sendAgentCommand(sid, { type: "reload" });
           await Promise.all([
@@ -3347,6 +3418,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "name": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToName") });
           if (!args) return complete({ handled: true, error: translate("agentSession.nameUsage") });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
@@ -3356,6 +3428,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "session": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const stats = await sendAgentCommand<SessionStatsInfo>(sid, { type: "get_session_stats" });
           if (stats) {
@@ -3368,6 +3441,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         case "btw": {
           // `/btw` alone opens the history; with a question it asks one.
           if (!args) {
+            const sid = await ensureRuntime();
             if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
             void openBtwHistory(sid);
             return { handled: true };
@@ -3376,6 +3450,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "copy": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const data = await sendAgentCommand<LastAssistantTextResponse>(sid, { type: "get_last_assistant_text" });
           const textToCopy = data?.text ?? "";
@@ -3819,7 +3894,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
     agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, slowModeSupported, slowModeEnabled, slowModeScope, usageLimit, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
-    retryInfo, contextUsage, systemPrompt, forkingEntryId,
+    retryInfo, contextUsage, systemPrompt, skillDiagnostics, forkingEntryId,
     isCompacting, compactError, compactResult, tokensPerSecond, currentModel, displayModel, isAutoModelSelection: !displayModel, sessionStats, agentPhase,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, dismissNotice, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
@@ -3831,7 +3906,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, messagesEndRef, scrollContainerRef,
     pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFastModeChange, handleSlowModeChange, handleAutoRetryChange, handleInterruptModeChange, handleAutoCompactionChange, handleSteeringModeChange, handleFollowUpModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, handleInterruptAndReply,
+    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFastModeChange, handleSlowModeChange, handleAutoRetryChange, handleInterruptModeChange, handleAutoCompactionChange, handleSteeringModeChange, handleFollowUpModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, handleInterruptAndReply, setSkillStartupDiagnostics,
     retrySession: () => { const sid = sessionIdRef.current; if (sid) void loadSession(sid, true, true); },
     handleCompact, handleHandoff, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleBuiltinSlashCommand, togglePreCompactionHistory,

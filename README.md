@@ -35,6 +35,19 @@ Queue **Delete** and **Edit** additionally require `remove_queued_message`. Dele
 
 The queue panel shows omp's own queue (`queuedMessages` in `get_state` and `queue_update` events, omp 18.4.4 or later), so every device viewing a session sees the same queued messages. **Stop** moves the text of messages still waiting in the queue back into the composer instead of letting the agent run them; a steer the model already picked up through live steering still runs. Older omp runtimes show no queue panel, and Stop cannot take queued messages back.
 
+Skill startup notices require an OMP runtime with `get_skill_diagnostics`,
+`set_skill_startup_diagnostics`, and `skill_diagnostics_update`. Conflicts and
+redundant installations appear above the composer when its OMP session starts;
+an empty new-chat page does not start OMP just for diagnostics. **Details** shows
+the resolved default, variants, identical copies, backing paths, sources, and
+selection reason. **Turn off startup notices** and **Settings → Interface &
+Behavior → Skill startup notices** use OMP's persisted
+`skills.showStartupDiagnostics` preference, not a separate browser setting.
+**Settings → Extensions & Tools → Skills → View skill diagnostics** remains
+available for a selected running session when notices are off. Inspection does
+not resume stopped sessions. Missing support or no running session is unavailable,
+not a clean result.
+
 ## Quick Start
 
 **Run directly without installing:**

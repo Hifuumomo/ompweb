@@ -13,6 +13,7 @@ import { ExtensionDialog } from "./ExtensionDialog";
 import { SubagentTranscriptDialog } from "./SubagentTranscriptDialog";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ComposerPanels } from "./ComposerPanels";
+import { SkillDiagnosticsNotice } from "./SkillDiagnostics";
 import { BtwHistoryDialog, type BtwPanelProps } from "./BtwPanel";
 import OmpWebLogo from "./OmpWebLogo";
 import { CHAT_COLUMN_MAX_WIDTH, MINIMAP_WIDTH } from "@/lib/chat-layout";
@@ -532,6 +533,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     isCompacting, compactResult, tokensPerSecond, displayModel: displayModelValue, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages, advisorActive, advisorEnabled, handleAdvisorChange,
     notices, dismissNotice, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    skillDiagnostics, setSkillStartupDiagnostics,
     isAutoModelSelection,
     agentPhase, activeGoal, activePlan,
     liveToolResults,
@@ -1232,6 +1234,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             </div>
             {newSessionWorkspace}
             <NoticeShelf notices={notices} onDismiss={dismissNotice} align="right" />
+            <SkillDiagnosticsNotice snapshot={skillDiagnostics} onDisable={() => setSkillStartupDiagnostics(false)} />
             <ComposerPanels todoPhases={[]} subagents={[]} onSelectSubagent={setSelectedSubagent} btw={btwPanel} />
             {/* ChatInput insets itself by CHAT_COLUMN_PADDING; cancel this column's
                 padding so the composer matches its in-session width. */}
@@ -1447,6 +1450,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
                 />
               </div>
             )}
+            <SkillDiagnosticsNotice snapshot={skillDiagnostics} onDisable={() => setSkillStartupDiagnostics(false)} />
             <ComposerPanels
               todoPhases={todoPhases}
               subagents={subagents}

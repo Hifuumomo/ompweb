@@ -20,6 +20,7 @@ import { PRESET_FULL } from "./tool-presets";
 import { comparableProjectPath } from "./comparable-path";
 import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
+import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "./skill-diagnostics";
 import { isReservedLaunchArg, loadProjectRegistry } from "./project-registry";
 import type {
   BashResultInfo,
@@ -736,6 +737,13 @@ export class AgentSessionWrapper {
         this.invalidateSessionLists();
         refreshSessionList = true;
         break;
+      case "skill_diagnostics_update":
+        this.emit({
+          type: "skill_diagnostics_update",
+          data: parseSkillDiagnosticsSnapshot(event.data),
+        });
+        notifyRunningChange();
+        return;
       case "response": {
         // Unsolicited failed responses surface async prompt failures (omp
         // reuses the original command id after the immediate ack). Some omp
@@ -1269,6 +1277,7 @@ export class AgentSessionWrapper {
     if (wasRunning && !this.isRunning()) {
       notifyRunningChange();
     }
+    const skillDiagnostics = parseSkillDiagnosticsSnapshot(state.skillDiagnostics);
     return {
       sessionId: state.sessionId,
       sessionFile: state.sessionFile ?? "",
@@ -1309,10 +1318,23 @@ export class AgentSessionWrapper {
       slowModeEnabled: state.slowModeEnabled ?? false,
       slowModeScope: state.slowModeScope,
       usageLimit: state.usageLimit,
+      anthropicSlowMode: state.anthropicSlowMode,
+      ...(skillDiagnostics ? { skillDiagnostics } : {}),
       todoPhases: state.todoPhases ?? [],
       extensionStatuses: Array.from(this.extensionStatuses, ([key, text]) => ({ key, text })),
       extensionWidgets: Array.from(this.extensionWidgets.values()),
     };
+  }
+
+  private requireSkillDiagnostics(value: unknown): SkillDiagnosticsSnapshot {
+    const snapshot = parseSkillDiagnosticsSnapshot(value);
+    if (!snapshot) {
+      throw new WebRpcError(
+        "Skill diagnostics are unavailable for this OMP session",
+        "skill_diagnostics_unsupported",
+      );
+    }
+    return snapshot;
   }
 
   private async getStateWithTimeout(): Promise<RpcSessionState> {
@@ -1558,6 +1580,22 @@ export class AgentSessionWrapper {
           }
           throw error;
         }
+      }
+
+      case "get_skill_diagnostics": {
+        const result = await this.proc.sendCommand<unknown>({ type: "get_skill_diagnostics" }, GET_STATE_TIMEOUT_MS);
+        return this.requireSkillDiagnostics(result);
+      }
+
+      case "set_skill_startup_diagnostics": {
+        if (typeof command.enabled !== "boolean") {
+          throw new WebRpcError("enabled must be a boolean", "invalid_skill_startup_diagnostics");
+        }
+        const result = await this.proc.sendCommand<unknown>({
+          type: "set_skill_startup_diagnostics",
+          enabled: command.enabled,
+        }, GET_STATE_TIMEOUT_MS);
+        return this.requireSkillDiagnostics(result);
       }
 
       case "set_model": {
