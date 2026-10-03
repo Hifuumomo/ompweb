@@ -282,6 +282,11 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
   stream's pending update) and are batched in `useBtw` with the coalescer's
   `scheduleAtDisplayRate` (rAF, 50ms timer in hidden tabs). Pending frames are
   flushed before a history snapshot is merged, never after it.
+- `btw_*` frames are routed to `useBtw` BEFORE `catchUp.observe(event)`, never
+  after: `observe()` classifies a frame on its `streamId`, and its `"epoch"`
+  branch resets the whole transcript (`dispatch({type:"reset"})` +
+  `clearLiveToolResults()`). A side question must never be able to wipe the
+  live view of the run happening beside it.
 - `get_btw_history` and `btw_cancel` never spawn or replace omp: the agent
   route answers them like `predict_word` (`NO_SPAWN_REPLIES`: empty history,
   `cancelled:false`) when no child is alive. History is re-read on every SSE
