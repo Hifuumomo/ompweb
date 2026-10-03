@@ -158,6 +158,14 @@ async function fetchStub(url, init = {}) {
       if (body?.type === "get_btw_history") {
         return jsonResponse(200, { success: true, data: { records: world.btwHistory.get(sid) ?? [] } });
       }
+      // omp before abort_and_restore_queue rejects it, which keeps the
+      // per-entry withdrawal tests on their fallback path; tests of the atomic
+      // path set what omp hands back.
+      if (body?.type === "abort_and_restore_queue") {
+        return world.abortRestoreQueue
+          ? jsonResponse(200, { success: true, data: world.abortRestoreQueue })
+          : jsonResponse(400, { error: "Unknown RPC command: abort_and_restore_queue" });
+      }
       return jsonResponse(200, { success: true, data: {} });
     }
   }
@@ -278,6 +286,7 @@ function resetWorld() {
   world.contextUnavailable = false;
   world.wrappers.clear();
   world.btwHistory.clear();
+  world.abortRestoreQueue = null;
 }
 
 function primeSession(sid, messages) {
@@ -3070,4 +3079,30 @@ test("REVIEW a 404 boundary on a live session (unreadable file / wrapper died) s
   );
   assert.equal(w.latest.notices.length, 0, "no failed-send notice");
   t.diagnostic("boundary 404 tolerated on a live session");
+});
+
+// The incident behind abort_and_restore_queue: a promoted steer was still in
+// omp when Stop landed but missing from this client's snapshot, so nothing
+// withdrew it and omp ran it as a new turn after the abort. omp's atomic Esc
+// takes back everything it holds, listed here or not.
+test("Stop takes queued input back through omp in one step, including a steer the snapshot missed", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-atomic");
+  primeSession("abort-atomic", [userMsg("u0", "loaded question")]);
+  const { w } = await startRun("abort-atomic", "hello agent");
+  world.abortRestoreQueue = {
+    steering: [{ text: "steer the snapshot missed" }],
+    followUp: [{ text: "later follow-up", images: [{ type: "image", data: "x", mimeType: "image/png" }] }],
+  };
+
+  await act(async () => { await w.latest.handleAbort(); });
+
+  const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
+  assert.equal(commands.filter((type) => type === "abort_and_restore_queue").length, 1);
+  assert.equal(commands.includes("abort"), false, "omp's own abort already stopped the run");
+  assert.equal(commands.includes("remove_queued_message"), false);
+  assert.equal(getDraft("abort-atomic")?.value, "steer the snapshot missed\n\nlater follow-up");
+  assert.deepEqual(w.latest.notices, []);
+  clearDraft("abort-atomic");
 });

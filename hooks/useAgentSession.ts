@@ -2786,10 +2786,31 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   executeBashRef.current = executeBash;
 
   const withdrawAndAbort = useCallback(async (sid: string, onAbortSent: () => void) => {
-    // Take pending messages back out of omp BEFORE the abort, like the TUI's
-    // Esc: omp runs a queued steer as soon as an abort lands (and keeps a
-    // follow-up for after the next reply, #130). Withdrawn texts return to
-    // this session's draft; a message the model already took (removed:
+    // Like the TUI's Esc, omp takes every pending user message back and then
+    // aborts, in one step: it also catches a steer this client's queue
+    // snapshot does not list yet, or one the run already claimed but never
+    // recorded, which a removal by text cannot reach and which omp would
+    // otherwise run as a new turn right after the abort. The texts return to
+    // this session's draft (attached images are dropped).
+    try {
+      const restored = await sendAgentCommand<{
+        steering?: Array<{ text?: unknown }>;
+        followUp?: Array<{ text?: unknown }>;
+      }>(sid, { type: "abort_and_restore_queue" });
+      onAbortSent();
+      const texts = [...(restored?.steering ?? []), ...(restored?.followUp ?? [])]
+        .map((entry) => entry.text)
+        .filter((text): text is string => typeof text === "string" && text.length > 0);
+      if (texts.length > 0) recoverDraftText(sid, texts.join("\n\n"));
+      return;
+    } catch {
+      // omp before abort_and_restore_queue ("Unknown command"), or a failed
+      // request: withdraw what the snapshot lists, then abort. Repeating the
+      // abort after one that did land is harmless.
+    }
+    // Take pending messages back out of omp BEFORE the abort: omp runs a
+    // queued steer as soon as an abort lands (and keeps a follow-up for after
+    // the next reply, #130). A message the model already took (removed:
     // false) lands in the transcript instead. A steer whose send has not
     // reached omp's queue snapshot yet is not withdrawn.
     const pending = queuedMessagesRef.current;
