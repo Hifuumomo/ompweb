@@ -336,6 +336,8 @@
   "chatInput.fastLabel": "Fast",
   "chatInput.slowMode.lowPriority": "low priority until {time}",
   "chatInput.slowMode.lowPriorityAllowance": "low priority until {time} · {percent}% left",
+  "chatInput.slowMode.lowPriorityNoReset": "low priority",
+  "chatInput.slowMode.lowPriorityAllowanceOnly": "low priority · {percent}% left",
   "chatInput.slowMode.wrapUp": "limit reached · wrapping up",
   "chatInput.slowMode.wrapUpReset": "limit reached · wrapping up · resets {time}",
   "chatInput.slowMode.wrapUpExtraUsage": "limit reached · wrap-up, then extra usage",

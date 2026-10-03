@@ -323,6 +323,8 @@
   "chatInput.fastLabel": "快速",
   "chatInput.slowMode.lowPriority": "低优先级至 {time}",
   "chatInput.slowMode.lowPriorityAllowance": "低优先级至 {time} · 剩余 {percent}%",
+  "chatInput.slowMode.lowPriorityNoReset": "低优先级",
+  "chatInput.slowMode.lowPriorityAllowanceOnly": "低优先级 · 剩余 {percent}%",
   "chatInput.slowMode.wrapUp": "已达限额 · 正在收尾",
   "chatInput.slowMode.wrapUpReset": "已达限额 · 正在收尾 · {time} 重置",
   "chatInput.slowMode.wrapUpExtraUsage": "已达限额 · 收尾后使用额外用量",

@@ -79,22 +79,48 @@ function formatSlowModeResetClock(resetsAtSec: number, now: number): string {
     : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** A reset time we can actually put on screen, or null when omp gave us none.
+ *  omp may omit the field or send a non-number, and a reset already in the
+ *  past would render a plausible but wrong clock — both are worse than saying
+ *  no time at all, because the user would plan around them. */
+function usableSlowModeResetTime(
+  resetsAtSec: number | null | undefined,
+  now: number,
+): string | null {
+  if (typeof resetsAtSec !== "number" || !Number.isFinite(resetsAtSec)) return null;
+  if (resetsAtSec * 1000 <= now) return null;
+  return formatSlowModeResetClock(resetsAtSec, now);
+}
+
+function slowModeAllowancePercent(
+  allowanceLeftPercent: number | null | undefined,
+): number | null {
+  return typeof allowanceLeftPercent === "number" && Number.isFinite(allowanceLeftPercent)
+    ? allowanceLeftPercent
+    : null;
+}
+
 function formatAnthropicSlowModeLabel(
   state: AnthropicSlowModeState,
   t: (key: string, vars?: Record<string, string | number>) => string,
   now = Date.now(),
 ): string {
+  const time = usableSlowModeResetTime(state.resetsAtSec, now);
   if (state.stage === "low_priority") {
-    const time = formatSlowModeResetClock(state.resetsAtSec, now);
-    return state.allowanceLeftPercent === undefined
+    // Read inside the narrowing: allowanceLeftPercent is not on the wrap_up arm.
+    const percent = slowModeAllowancePercent(state.allowanceLeftPercent);
+    if (time === null) {
+      return percent === null
+        ? t("chatInput.slowMode.lowPriorityNoReset")
+        : t("chatInput.slowMode.lowPriorityAllowanceOnly", { percent });
+    }
+    return percent === null
       ? t("chatInput.slowMode.lowPriority", { time })
-      : t("chatInput.slowMode.lowPriorityAllowance", { time, percent: state.allowanceLeftPercent });
+      : t("chatInput.slowMode.lowPriorityAllowance", { time, percent });
   }
   if (state.extraUsage) return t("chatInput.slowMode.wrapUpExtraUsage");
-  if (state.resetsAtSec === undefined) return t("chatInput.slowMode.wrapUp");
-  return t("chatInput.slowMode.wrapUpReset", {
-    time: formatSlowModeResetClock(state.resetsAtSec, now),
-  });
+  if (time === null) return t("chatInput.slowMode.wrapUp");
+  return t("chatInput.slowMode.wrapUpReset", { time });
 }
 
 export type { AttachedImage, AttachedTextFile } from "./ChatInput-draft-attachments";
@@ -3053,7 +3079,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 past-the-limit service is never mistaken for normal.
                 Layout lives in globals.css (own row on mobile). */}
             {anthropicSlowModeLabel && (
-              <div className="composer-slow-mode-badge" title={anthropicSlowModeLabel}>
+              <div className="composer-slow-mode-badge" role="status" aria-live="polite" title={anthropicSlowModeLabel}>
                 {anthropicSlowModeLabel}
               </div>
             )}
