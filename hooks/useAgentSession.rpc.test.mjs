@@ -1560,6 +1560,36 @@ test("a reconcile response that straddles a run boundary is dropped by the run-i
   assert.equal(w.latest.agentRunning, false);
 });
 
+test("ISSUE #187 the context ring fills mid-run while the agent is still streaming", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("s1", "q1");
+  await act(async () => {
+    es.emit({ type: "agent_start" });
+    es.emit({ type: "message_update", message: assistantMsg("a1", "streaming") });
+    await Promise.resolve();
+  });
+  await settle(90);
+  assert.ok(!w.latest.contextUsage, "a continued conversation starts with no live usage");
+
+  // The server has real usage while the run is genuinely busy — it used to be
+  // dropped, so the ring stayed blank until the run ended.
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.includes("/api/agent/s1"),
+    produce: () => ({
+      status: 200,
+      value: { running: true, state: { isStreaming: true, contextUsage: { percent: 42, contextWindow: 200000, tokens: 84000 } } },
+    }),
+  });
+  await act(async () => {
+    es.emit({ type: "todo_reminder" }); // triggers the mid-run reconcile poll
+    await sleep(30);
+  });
+  await settle();
+  assert.deepEqual(w.latest.contextUsage, { percent: 42, contextWindow: 200000, tokens: 84000 });
+  assert.equal(w.latest.agentRunning, true, "applying usage must not finish a busy run");
+});
+
 test("fatal SSE error mid-run reconnects after 1s and the new stream delivers events", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
