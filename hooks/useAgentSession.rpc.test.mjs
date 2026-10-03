@@ -83,6 +83,7 @@ const world = {
   views: new Map(),
   contextUnavailable: false,
   wrappers: new Map(),
+  btwHistory: new Map(), // sid -> BtwRecord[] served by get_btw_history
 };
 
 async function fetchStub(url, init = {}) {
@@ -154,6 +155,9 @@ async function fetchStub(url, init = {}) {
       if (body?.type === "get_subagents") {
         return jsonResponse(200, { success: true, data: { subagents: world.subagentSnapshots.get(sid) ?? [] } });
       }
+      if (body?.type === "get_btw_history") {
+        return jsonResponse(200, { success: true, data: { records: world.btwHistory.get(sid) ?? [] } });
+      }
       return jsonResponse(200, { success: true, data: {} });
     }
   }
@@ -211,6 +215,7 @@ const { selectSessionHistory } = await jiti.import("@/lib/session-sync");
 const { publishSessionsChanged } = await jiti.import("@/lib/session-change-bus");
 const { AgentSessionWrapper } = await jiti.import("@/lib/rpc-manager");
 const { isUnknownSlashCommand, slashCommandName } = await jiti.import("@/hooks/useAgentSession-stream");
+const { toastCalls } = await jiti.import("@/components/ui/toast");
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -272,6 +277,7 @@ function resetWorld() {
   world.views.clear();
   world.contextUnavailable = false;
   world.wrappers.clear();
+  world.btwHistory.clear();
 }
 
 function primeSession(sid, messages) {
@@ -1739,6 +1745,117 @@ test("subagent roster is restored from the get_subagents snapshot after reconnec
   );
 });
 
+/** Poll inside act until `check` holds (btw frames flush on a display-rate timer). */
+async function until(check, message, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) assert.fail(message);
+    await settle(10);
+  }
+}
+
+const btwRecord = (overrides = {}) => ({
+  id: "b1", leafId: null, question: "what is 2+2", answer: "", status: "running", createdAt: 1, updatedAt: 1, ...overrides,
+});
+
+function holdBtwCommand(type, produce) {
+  world.holds.push({ match: (method, _url, body) => method === "POST" && body?.type === type, produce });
+}
+
+function postedSince(index) {
+  return world.calls.slice(index).filter((c) => c.method === "POST").map((c) => c.body);
+}
+
+test("/btw mid-run asks a side question, never a prompt, and streams its answer beside the run", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun("s1");
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord() } } }));
+  const before = world.calls.length;
+  let result;
+  await act(async () => {
+    result = await w.latest.handleBuiltinSlashCommand("/btw what is 2+2");
+  });
+  assert.deepEqual(result, { handled: true });
+  const posted = postedSince(before);
+  assert.deepEqual(posted.filter((b) => ["prompt", "steer", "follow_up", "abort_and_prompt"].includes(b?.type)), []);
+  assert.deepEqual(posted.filter((b) => b?.type === "btw"), [{ type: "btw", question: "what is 2+2" }]);
+
+  await act(async () => {
+    es.emit({ type: "btw_delta", recordId: "b1", delta: "It is " });
+    es.emit({ type: "btw_delta", recordId: "b1", delta: "4." });
+  });
+  await until(() => w.latest.btw.records[0]?.answer === "It is 4.", "deltas stream into the record");
+  assert.equal(w.latest.btw.activeId, "b1", "the side question opens in the composer panel");
+
+  await act(async () => {
+    es.emit({ type: "btw_record", record: btwRecord({ answer: "It is 4.", status: "complete", updatedAt: 2 }) });
+  });
+  await until(() => w.latest.btw.records[0]?.status === "complete", "the terminal record settles it");
+  assert.equal(w.latest.agentRunning, true, "the main run is untouched");
+  assert.equal(w.latest.messages.some((m) => JSON.stringify(m.content).includes("2+2")), false, "never enters the transcript");
+});
+
+test("a btw follow-up asks in its topic; a refused ask keeps the composer text and says why", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w } = await startStreamingRun("s1");
+  const followUp = { question: "and 3+3?", answer: "", status: "running", createdAt: 2, updatedAt: 2 };
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord({ answer: "4", status: "complete", followUps: [followUp] }) } } }));
+  let before = world.calls.length;
+  await act(async () => {
+    assert.equal(await w.latest.askBtw("and 3+3?", "b1"), true);
+  });
+  assert.deepEqual(postedSince(before).filter((b) => b?.type === "btw"), [{ type: "btw", question: "and 3+3?", recordId: "b1" }]);
+
+  toastCalls.length = 0;
+  holdBtwCommand("btw", async () => ({ status: 400, value: { error: "A /btw question is still running; cancel it first", code: "rpc_command_failed" } }));
+  let result;
+  await act(async () => {
+    result = await w.latest.handleBuiltinSlashCommand("/btw another one");
+  });
+  assert.deepEqual(result, { handled: true, retainInput: true });
+  assert.deepEqual(toastCalls, [["error", "Side question failed", "A /btw question is still running; cancel it first"]]);
+
+  // An omp without the commands gets an upgrade hint, not its raw error.
+  toastCalls.length = 0;
+  holdBtwCommand("btw", async () => ({ status: 400, value: { error: "Unknown command: btw", code: "rpc_command_failed" } }));
+  await act(async () => {
+    await w.latest.handleBuiltinSlashCommand("/btw old omp?");
+  });
+  assert.match(toastCalls[0]?.[1] ?? "", /requires a newer omp/);
+
+  // Cancelling a btw that is still starting is the user's own doing, not a failure.
+  toastCalls.length = 0;
+  holdBtwCommand("btw", async () => ({ status: 400, value: { error: "The /btw question was cancelled before it started", code: "rpc_command_failed" } }));
+  await act(async () => {
+    result = await w.latest.handleBuiltinSlashCommand("/btw cancelled early");
+  });
+  assert.deepEqual(result, { handled: true });
+  assert.deepEqual(toastCalls, []);
+});
+
+test("SSE open merges the btw history; a no-op cancel re-reads it and settles a record omp lost", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.btwHistory.set("s1", [btwRecord({ answer: "It is" })]);
+  const { w } = await startStreamingRun("s1");
+  assert.ok(world.calls.some((c) => c.body?.type === "get_btw_history"), "the stream open reads the history");
+  await until(() => w.latest.btw.activeId === "b1", "a running topic found on connect opens the panel");
+  assert.equal(w.latest.btw.records[0].answer, "It is");
+
+  // The child no longer knows the record (failed checkpoint, replaced child).
+  world.btwHistory.set("s1", []);
+  holdBtwCommand("btw_cancel", async () => ({ value: { success: true, data: { cancelled: false } } }));
+  const before = world.calls.length;
+  await act(async () => {
+    await w.latest.btw.cancel("b1");
+  });
+  assert.deepEqual(postedSince(before).map((b) => b?.type), ["btw_cancel", "get_btw_history"]);
+  assert.deepEqual(postedSince(before)[0], { type: "btw_cancel", recordId: "b1" });
+  await until(() => w.latest.btw.records[0]?.status === "interrupted", "the lost record stops spinning");
+});
+
 function liveSnapshot(sid, sequence, streamingMessage, toolEvents = []) {
   return {
     cursor: { streamId: `stream-${sid}`, sequence },
@@ -2111,6 +2228,55 @@ test("an abandoned new-chat send delivers its prompt without promoting or attach
   assert.deepEqual(promoted, []);
   assert.deepEqual(world.esInstances, []);
   assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.message === "deliver after navigation"));
+});
+
+test("a /btw that starts a fresh chat promotes it once omp accepts the question", async () => {
+  resetWorld();
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: async () => ({ value: { sessionId: "created" } }),
+  });
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord() } } }));
+  const promoted = [];
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: (session) => promoted.push(session.id) });
+  let asked;
+  await act(async () => {
+    asked = w.latest.handleBuiltinSlashCommand("/btw what is 2+2");
+    await sleep(30); // spawn + pre-connect get_state
+  });
+  await act(async () => {
+    lastEs().open();
+    assert.deepEqual(await asked, { handled: true });
+  });
+  assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.type === "btw"));
+  assert.deepEqual(promoted, ["created"], "the new-chat view becomes the session");
+  w.unmount();
+});
+
+test("an abandoned new-chat /btw is still asked, but neither promotes, attaches a stream, nor reports success", async () => {
+  resetWorld();
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { sessionId: "created" } }); }),
+  });
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord() } } }));
+  const promoted = [];
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: (session) => promoted.push(session.id) });
+  let asked;
+  await act(async () => {
+    asked = w.latest.askBtw("asked before leaving");
+    await sleep(20);
+    w.unmount();
+  });
+  await act(async () => {
+    release();
+    // The stale composer must keep (not clear) a draft key the user moved on to.
+    assert.equal(await asked, false);
+  });
+  assert.deepEqual(promoted, []);
+  assert.deepEqual(world.esInstances, [], "an unmounted chat must not attach a stream its cleanup already ran for");
+  assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.question === "asked before leaving"));
 });
 
 test("forking carries the advisor choice to the child's next native command", async () => {

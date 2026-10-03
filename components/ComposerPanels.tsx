@@ -14,6 +14,7 @@ import { formatCompactNumber, formatPercent, getCacheHitRate } from "@/lib/forma
 import { copyText } from "@/lib/clipboard";
 import { TodoList } from "./TodoList";
 import { SubagentStatusIcon } from "./SubagentStatusIcon";
+import { BtwPanel, type BtwPanelProps } from "./BtwPanel";
 
 // Panels unmount when their inputs are empty and remount when they fill
 const TODO_COLLAPSED_STORAGE_KEY = "omp-web:composer-todo-collapsed";
@@ -293,21 +294,24 @@ function SubagentsPanel({ subagents, onSelectSubagent, defaultExpanded = false }
   );
 }
 
-/** Session panels attached to the composer: live todo plan + running
- * subagent roster. Each is independently collapsible via its header row
- * (`chevron`) and starts collapsed; the headers always show live progress /
- * running-summary. Rendered pinned above the chat input. */
-export function ComposerPanels({ todoPhases, subagents, onSelectSubagent, defaultExpanded = false }: {
+/** Session panels attached to the composer: the active side question (`/btw`),
+ * live todo plan + running subagent roster. Each is independently collapsible
+ * via its header row (`chevron`); todo/subagents start collapsed (headers
+ * always show live progress / running-summary), a new side question starts
+ * expanded. Rendered pinned above the chat input. */
+export function ComposerPanels({ todoPhases, subagents, onSelectSubagent, btw = null, defaultExpanded = false }: {
   todoPhases: TodoPhase[];
   subagents: SubagentInfo[];
   onSelectSubagent: (subagent: SubagentInfo) => void;
+  btw?: BtwPanelProps | null;
   /** Initial expansion of both panels (default: collapsed). */
   defaultExpanded?: boolean;
 }) {
   const [todoCollapsed, setTodoCollapsed] = useState(() => loadCollapsed(TODO_COLLAPSED_STORAGE_KEY, defaultExpanded));
-  if (todoPhases.length === 0 && subagents.length === 0) return null;
+  if (todoPhases.length === 0 && subagents.length === 0 && !btw) return null;
   return (
     <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
+      {btw && <BtwPanel key={btw.record.id} {...btw} />}
       <TodoList
         phases={todoPhases}
         collapsible

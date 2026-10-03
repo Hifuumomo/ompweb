@@ -8,6 +8,7 @@ import type { ActiveGoal, ActivePlan } from "@/lib/web-mode-state";
 import { toast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/field";
 import { useDictation } from "@/hooks/useDictation";
+import { toastBtwError } from "@/hooks/useBtw";
 import type { GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
@@ -754,29 +755,48 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     return error !== null;
   }, []);
 
+  /** Run a client builtin. True once handled; the composer is cleared only on
+   * success and only if it still holds what was sent (the user may have
+   * started typing while the command ran). */
+  const runBuiltinCommand = useCallback(async (msg: string, overrideText?: string): Promise<boolean> => {
+    if (!onBuiltinCommand) return false;
+    const sentValue = overrideText ?? valueRef.current;
+    const result = await onBuiltinCommand(msg);
+    if (!result.handled) return false;
+    if (!result.error && !result.retainInput && (overrideText !== undefined || valueRef.current === sentValue)) clearInput();
+    return true;
+  }, [onBuiltinCommand, clearInput]);
+
+  /** `/btw` asks a side question beside any run: never a prompt, never
+   * queued. Attachments cannot ride along, so refuse and keep the draft
+   * rather than drop them. False when `msg` is not `/btw`. */
+  const sendSideQuestion = useCallback((msg: string, overrideText?: string): boolean => {
+    if (!/^\/btw(\s|$)/.test(msg) || !onBuiltinCommand) return false;
+    if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) {
+      toast.error(t("btw.attachmentsUnsupported"));
+      return true;
+    }
+    runBuiltinCommand(msg, overrideText).catch(toastBtwError);
+    return true;
+  }, [onBuiltinCommand, runBuiltinCommand, t]);
+
   const handleSend = useCallback(async (overrideText?: string) => {
     const raw = overrideText ?? value;
     const msg = raw.trim();
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (isStreaming) return;
     onAudioUnlock?.();
+    if (sendSideQuestion(msg, overrideText)) return;
     const composedMessage = composeMessageWithTextAttachments(msg, attachedTextFilesRef.current);
     if (!attachedImagesRef.current.length && !attachedTextFilesRef.current.length && msg.startsWith("/") && onBuiltinCommand) {
       const expansion = expandWebSlashCommand(msg);
       if (expansion.kind === "expand" && rejectsOversizedPrompt(expansion.prompt, attachedImagesRef.current)) return;
-      const sentValue = overrideText ?? value;
-      const result = await onBuiltinCommand(msg);
-      if (result.handled) {
-        // The user may have started typing while the command ran; only clear
-        // if the composer still holds what was sent.
-        if (!result.error && !result.retainInput && (overrideText !== undefined || valueRef.current === sentValue)) clearInput();
-        return;
-      }
+      if (await runBuiltinCommand(msg, overrideText)) return;
     }
     if (rejectsOversizedPrompt(composedMessage, attachedImagesRef.current)) return;
     onSend(composedMessage, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     clearInput();
-  }, [value, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, rejectsOversizedPrompt]);
+  }, [value, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, rejectsOversizedPrompt, runBuiltinCommand, sendSideQuestion]);
   /** What happens to the composer after the transcript lands: null inserts it
    *  for editing; "send" dispatches immediately; "steer"/"followup" queue it
    *  into the running agent. */
@@ -1177,6 +1197,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const raw = overrideText ?? value;
     const msg = raw.trim();
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
+    if (sendSideQuestion(msg, overrideText)) return;
     if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) return;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
@@ -1218,7 +1239,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       onFollowUp(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     }
     clearInput();
-  }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt]);
+  }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt, sendSideQuestion]);
   // A typed, text-only message during a run is a queued follow-up — and so is
   // a dictation in progress: the primary button must take the same state it
   // would have if the composer already held text. Keep Stop as the action

@@ -22,6 +22,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: { name: string; descriptionKey: string;
     descriptionKey: command.descriptionKey,
     argumentHintKey: command.argumentHintKey,
   })),
+  { name: "btw", descriptionKey: "chatInput.cmdBtw", argumentHintKey: "chatInput.cmdBtwArg" },
   { name: "compact", descriptionKey: "chatInput.cmdCompact" },
   { name: "reload", descriptionKey: "chatInput.cmdReload" },
   { name: "name", descriptionKey: "chatInput.cmdName" },

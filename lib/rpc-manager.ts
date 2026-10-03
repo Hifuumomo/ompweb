@@ -144,6 +144,9 @@ const PASSTHROUGH_COMMANDS = new Set([
   "login",
   "predict_word",
   "predict_word_feedback",
+  "btw",
+  "btw_cancel",
+  "get_btw_history",
 ]);
 
 // Outlasts omp's cold prediction-daemon start (up to 3 × 30s start rounds plus a
