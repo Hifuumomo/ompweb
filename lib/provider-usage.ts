@@ -181,7 +181,9 @@ async function fetchProviderUsage(refresh = false): Promise<string> {
 function getUsageOutput(refresh = false): Promise<string> {
   if (!refresh && usageCache && usageCache.expiresAt > Date.now()) return Promise.resolve(usageCache.output);
   if (usageInFlight) {
-    return refresh && !usageInFlightForced ? usageInFlight.then(() => getUsageOutput(true)) : usageInFlight;
+    return refresh && !usageInFlightForced
+      ? usageInFlight.then(() => getUsageOutput(true), () => getUsageOutput(true))
+      : usageInFlight;
   }
   usageInFlightForced = refresh;
   usageInFlight = fetchProviderUsage(refresh)
