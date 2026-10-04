@@ -24,6 +24,7 @@ import { Plus, Trash2, RefreshCw, AlertCircle, Cpu, Settings, Sparkles, Check as
 import { toast } from "@/components/ui/toast";
 import { SettingsTabs, type SettingsTab } from "./SettingsTabs";
 import { ModelCatalogPicker } from "./ModelCatalogPicker";
+import { ProviderAccounts } from "./ProviderAccounts";
 import {
   API_OPTIONS,
   COMPOSER_MODELS_STORAGE_KEY,
@@ -1018,6 +1019,8 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
           <p style={{ margin: 0, fontSize: 12, color: "var(--status-error)" }}>{loginState.message}</p>
         )}
       </div>
+
+      <ProviderAccounts providerId={provider.id} enabled={provider.loggedIn} />
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 8 }}>
