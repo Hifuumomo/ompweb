@@ -90,6 +90,8 @@ app/api/
 
 lib/
   omp/                 shared omp foundations (paths, CLI probe, RpcProcess)
+  abort-signal.ts      browser-safe fetch timeout / abort helpers (no AbortSignal.timeout/any)
+  provider-accounts.ts distinct omp accounts per provider from `omp usage` reports (Models → provider detail)
   agent-client.ts      typed fetch helper for /api/agent commands
   btw.ts               /btw side-question records + pure frame/snapshot merge (order-safe)
   draft-store.ts       local draft persistence helpers
@@ -188,6 +190,29 @@ hooks/
 - Only session ids are stored; paths are re-resolved on resume.
 - Known limit: resume does not detect a terminal `omp --resume <id>` started
   on the same session while omp-web was down; both would write the file.
+
+### Session moves (omp >= 18.5 ownership) and title generation
+- Only the first omp process to write a session file owns it; a non-owner moves
+  to a sibling file with a new id on its first write and emits a
+  `notice` with `source: "session-persistence"`. `handleFrame` answers it with
+  `followSessionMove()`: the pending flag makes the next `applyIdentity` treat
+  the id change as the same conversation (stream/run state kept, **old id kept
+  as a registry alias**, new id registered via `onIdentityChange({keepOldId})`).
+  Branch/new/switch still drop the old key. `startRpcSession` also reuses any
+  live wrapper reporting the requested session file instead of spawning a second
+  `--resume` child (which would fork again). `onDestroy` removes every key that
+  points at the wrapper.
+- `POST /api/sessions/[id]/auto-name` asks omp to generate the title
+  (`AgentSessionWrapper.generateTitle()`: native `generate_title`, else
+  argument-less `/rename`, never while a run is in flight). Only when omp cannot
+  does it fall back to the stored/derived title (`generated:false`), saved
+  through the live process when there is one.
+
+### Browser compatibility
+Client code (`components/`, `hooks/`) must not call `AbortSignal.timeout`,
+`AbortSignal.any` or `Promise.withResolvers` — older mobile browsers throw and
+the whole tree shows the "unexpected error" screen. Use `lib/abort-signal.ts`
+(`fetchWithTimeout`, `timeoutSignal`, `sleep`). Server code may use them freely.
 
 ### Two kinds of branching — don't confuse them
 - **Fork** ("Fork a new session from this point" button, `messageView.newSessionTitle`, on user and assistant messages; only offered while the session is idle — ChatWindow gates it on `!sessionBusy && !isNew`): creates a new independent `.jsonl` file via omp's `branch` RPC. Shown as a child in the sidebar tree via `parentSession` header field. `branch` only takes a user entry and keeps the history *before* it, so `lib/chat-fork.ts` maps rows: a user prompt forks at itself and its returned text prefills the fork's composer (edit-and-resend, text only — attached images are not restored); an assistant reply forks at the next user prompt so the reply is kept; the newest reply falls back to its own prompt with the prefill. Rows that would edit the very first prompt (an empty fork) offer no fork.
