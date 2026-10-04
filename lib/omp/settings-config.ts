@@ -7,6 +7,7 @@ import { effectiveCompactionMethodOrder, isCompactionMethodOrder, type Compactio
 
 export type NativeSettings = {
   defaultThinkingLevel?: "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  providers?: { autoThinkingSource?: "classifier" | "vendor" };
   hideThinkingBlock?: boolean;
   externalThinking?: boolean;
   textVerbosity?: "low" | "medium" | "high";
@@ -64,12 +65,29 @@ function readDocument() {
   return { path, doc };
 }
 
+/** omp's `/slow` for Claude: `providers.anthropic.slowMode: auto` (default off).
+ *  An unreadable config counts as off, like omp's default. */
+export function readAnthropicSlowMode(): boolean {
+  try {
+    const data = readDocument().doc.toJS();
+    if (!isRecord(data)) return false;
+    const providers = isRecord(data.providers) ? data.providers : {};
+    const anthropic = isRecord(providers.anthropic) ? providers.anthropic : {};
+    // omp's migration also accepts top-level dotted keys, nested values winning.
+    return (anthropic.slowMode ?? data["providers.anthropic.slowMode"]) === "auto";
+  } catch {
+    return false;
+  }
+}
+
 /** Returns the persisted native OMP values only; omitted keys keep OMP defaults. */
 export function readNativeSettings(): { path: string; settings: NativeSettings } {
   const { path, doc } = readDocument();
   const data = doc.toJS();
   if (!isRecord(data)) return { path, settings: {} };
   const advisor = isRecord(data.advisor) ? data.advisor : {};
+  const providers = isRecord(data.providers) ? data.providers : {};
+  const autoThinkingSource = providers.autoThinkingSource;
   const tools = isRecord(data.tools) ? data.tools : {};
   const approval = isRecord(tools.approval) ? tools.approval : {};
   const retry = isRecord(data.retry) ? data.retry : {};
@@ -94,6 +112,9 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
     path,
     settings: {
       ...(THINKING_LEVELS.has(data.defaultThinkingLevel as string) ? { defaultThinkingLevel: data.defaultThinkingLevel as NativeSettings["defaultThinkingLevel"] } : {}),
+      ...(autoThinkingSource === "classifier" || autoThinkingSource === "vendor"
+        ? { providers: { autoThinkingSource } }
+        : {}),
       ...(typeof data.hideThinkingBlock === "boolean" ? { hideThinkingBlock: data.hideThinkingBlock } : {}),
       ...(typeof data.externalThinking === "boolean" ? { externalThinking: data.externalThinking } : {}),
       ...(TEXT_VERBOSITIES.has(data.textVerbosity as string) ? { textVerbosity: data.textVerbosity as NativeSettings["textVerbosity"] } : {}),
@@ -156,6 +177,11 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
 /** Validates and applies a reviewed subset of OMP's global config schema. */
 export function writeNativeSettings(settings: NativeSettings): void {
   if (!isRecord(settings)) throw new Error("Settings must be an object");
+  assertOptionalRecord(settings.providers, "providers");
+  const autoThinkingSource = settings.providers?.autoThinkingSource;
+  if (autoThinkingSource !== undefined && autoThinkingSource !== "classifier" && autoThinkingSource !== "vendor") {
+    throw new Error("Invalid Auto thinking source");
+  }
   assertOptionalRecord(settings.advisor, "advisor");
   assertOptionalRecord(settings.tools, "tools");
   assertOptionalRecord(settings.tools?.approval, "tools.approval");
@@ -219,6 +245,7 @@ export function writeNativeSettings(settings: NativeSettings): void {
   }
   if (!isMap(doc.contents)) throw new Error(`${path} must contain a YAML mapping`);
   if (settings.defaultThinkingLevel !== undefined) doc.set("defaultThinkingLevel", settings.defaultThinkingLevel);
+  if (autoThinkingSource !== undefined) doc.setIn(["providers", "autoThinkingSource"], autoThinkingSource);
   if (settings.hideThinkingBlock !== undefined) doc.set("hideThinkingBlock", settings.hideThinkingBlock);
   if (settings.externalThinking !== undefined) doc.set("externalThinking", settings.externalThinking);
   if (settings.textVerbosity !== undefined) doc.set("textVerbosity", settings.textVerbosity);

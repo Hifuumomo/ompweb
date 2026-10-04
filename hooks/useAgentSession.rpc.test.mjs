@@ -138,7 +138,7 @@ async function fetchStub(url, init = {}) {
     });
   }
   if (/^\/api\/models/.test(u)) {
-    return jsonResponse(200, { models: {}, modelList: [], defaultModel: null });
+    return jsonResponse(200, world.models ?? { models: {}, modelList: [], defaultModel: null });
   }
   if ((m = u.match(/\/api\/agent\/([^/?#]+)/))) {
     const sid = decodeURIComponent(m[1]);
@@ -157,6 +157,14 @@ async function fetchStub(url, init = {}) {
       }
       if (body?.type === "get_btw_history") {
         return jsonResponse(200, { success: true, data: { records: world.btwHistory.get(sid) ?? [] } });
+      }
+      // omp before abort_and_restore_queue rejects it (its real wording), which keeps the
+      // per-entry withdrawal tests on their fallback path; tests of the atomic
+      // path set what omp hands back.
+      if (body?.type === "abort_and_restore_queue") {
+        return world.abortRestoreQueue
+          ? jsonResponse(200, { success: true, data: world.abortRestoreQueue })
+          : jsonResponse(400, { error: "Unknown command: abort_and_restore_queue", code: "rpc_command_failed" });
       }
       return jsonResponse(200, { success: true, data: {} });
     }
@@ -276,8 +284,10 @@ function resetWorld() {
   world.live.clear();
   world.views.clear();
   world.contextUnavailable = false;
+  world.models = undefined;
   world.wrappers.clear();
   world.btwHistory.clear();
+  world.abortRestoreQueue = null;
 }
 
 function primeSession(sid, messages) {
@@ -2702,30 +2712,127 @@ const SLOW_STATE = { stage: "low_priority", resetsAtSec: 1770000000, allowanceLe
 test("opening a session past its Claude usage limit shows the badge, and an idle /slow off clears it", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, anthropicSlowMode: SLOW_STATE } });
+  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, usageLimit: SLOW_STATE } });
   const w = await mountSession("s1");
-  assert.deepEqual(w.latest.anthropicSlowMode, SLOW_STATE);
+  assert.deepEqual(w.latest.usageLimit, SLOW_STATE);
 
   world.agents.set("s1", { running: true, state: { model: SLOW_MODEL } });
   await act(async () => { lastEs().emit({ type: "prompt_result", agentInvoked: false }); });
   await settle();
-  assert.equal(w.latest.anthropicSlowMode, undefined);
+  assert.equal(w.latest.usageLimit, undefined);
 });
 
 test("the usage-limit badge appears mid-run and clears when the run ends without it", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
   const { w, es } = await startStreamingRun("s1");
-  world.agents.set("s1", { running: true, state: { isStreaming: true, model: SLOW_MODEL, anthropicSlowMode: SLOW_STATE } });
+  world.agents.set("s1", { running: true, state: { isStreaming: true, model: SLOW_MODEL, usageLimit: SLOW_STATE } });
   // The in-run sample ticks every 2s; wait for it rather than a fixed sleep.
-  for (let waited = 0; w.latest.anthropicSlowMode !== SLOW_STATE && waited < 5000; waited += 250) await settle(250);
-  assert.deepEqual(w.latest.anthropicSlowMode, SLOW_STATE);
+  for (let waited = 0; w.latest.usageLimit !== SLOW_STATE && waited < 5000; waited += 250) await settle(250);
+  assert.deepEqual(w.latest.usageLimit, SLOW_STATE);
 
   saveSession("s1", [userMsg("u0", "q"), assistantMsg("a1", "done")]);
   world.agents.set("s1", { running: false, state: { model: SLOW_MODEL } });
   await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
   await settle();
-  assert.equal(w.latest.anthropicSlowMode, undefined);
+  assert.equal(w.latest.usageLimit, undefined);
+});
+
+test("the Slow toggle follows omp's per-model state and is cleared by a switch to an unsupported model", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, slowModeSupported: true, slowModeEnabled: true } });
+  const w = await mountSession("s1");
+  assert.equal(w.latest.slowModeSupported, true);
+  assert.equal(w.latest.slowModeEnabled, true);
+
+  // A model without /slow reports supported:false and omits enabled; the
+  // persisted Claude setting may still be on, but it must not show as pressed.
+  world.agents.set("s1", { running: true, state: { model: { provider: "openrouter", id: "other" }, slowModeSupported: false } });
+  await act(async () => { lastEs().emit({ type: "model_changed" }); });
+  await settle();
+  assert.equal(w.latest.slowModeSupported, false);
+  assert.equal(w.latest.slowModeEnabled, false);
+});
+
+/** Mounts s1 with Slow at `enabled`, answers the next set_slow_mode with `answer`, and parks the follow-up state refresh so only the command's answer can move the toggle. */
+async function mountSlowToggle(enabled, answer) {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, slowModeSupported: true, slowModeEnabled: enabled, slowModeScope: "global" } });
+  const w = await mountSession("s1");
+  assert.equal(w.latest.slowModeEnabled, enabled);
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "set_slow_mode",
+    produce: async () => answer,
+  });
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/sessions/s1/state",
+    produce: () => new Promise(() => {}),
+  });
+  return w;
+}
+
+for (const enabled of [false, true]) {
+  test(`turning Slow ${enabled ? "on" : "off"} sends set_slow_mode and applies omp's answer`, async () => {
+    const w = await mountSlowToggle(!enabled, { value: { success: true, data: { enabled } } });
+    const posted = world.calls.length;
+    await act(async () => { await w.latest.handleSlowModeChange(enabled); });
+    const command = world.calls.slice(posted).find((call) => call.body?.type === "set_slow_mode");
+    assert.deepEqual(command?.body, { type: "set_slow_mode", enabled });
+    assert.equal(w.latest.slowModeEnabled, enabled);
+    assert.deepEqual(w.latest.notices, []);
+  });
+}
+
+test("a refused set_slow_mode leaves the toggle as it was and shows omp's error", async () => {
+  const refusal = "Slow mode is unavailable for the current model.";
+  const w = await mountSlowToggle(false, { status: 400, value: { error: refusal } });
+  await act(async () => { await w.latest.handleSlowModeChange(true); });
+  assert.equal(w.latest.slowModeEnabled, false);
+  assert.deepEqual(w.latest.notices.map((n) => [n.type, n.message]), [["error", refusal]]);
+});
+
+test("before omp runs, Slow comes from the catalog and the Claude setting; live state then wins", async () => {
+  resetWorld();
+  world.models = {
+    models: {}, defaultModel: null, anthropicSlowMode: true,
+    modelList: [{ id: SLOW_MODEL.id, name: "Claude", provider: SLOW_MODEL.provider, supportsSlowMode: true }],
+  };
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.sessions.get("s1").model = { provider: SLOW_MODEL.provider, modelId: SLOW_MODEL.id };
+  const w = await mountSession("s1");
+  assert.equal(w.latest.slowModeSupported, true);
+  assert.equal(w.latest.slowModeEnabled, true);
+  assert.equal(w.latest.slowModeScope, "global");
+
+  // Clicking spawns omp; one that reports no support for the model hides it.
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "set_slow_mode",
+    produce: async () => { world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, slowModeSupported: false } }); return { value: { success: true, data: { enabled: false } } }; },
+  });
+  await act(async () => { await w.latest.handleSlowModeChange(false); });
+  await settle();
+  assert.equal(w.latest.slowModeSupported, false);
+  assert.equal(w.latest.slowModeEnabled, false);
+});
+
+test("the Slow scope follows omp's state and clears with support", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, slowModeSupported: true, slowModeEnabled: false, slowModeScope: "global" } });
+  const w = await mountSession("s1");
+  assert.equal(w.latest.slowModeScope, "global");
+
+  world.agents.set("s1", { running: true, state: { model: { provider: "openai", id: "gpt-test" }, slowModeSupported: true, slowModeEnabled: false, slowModeScope: "session" } });
+  await act(async () => { lastEs().emit({ type: "model_changed" }); });
+  await settle();
+  assert.equal(w.latest.slowModeScope, "session");
+
+  world.agents.set("s1", { running: true, state: { model: { provider: "openrouter", id: "other" }, slowModeSupported: false } });
+  await act(async () => { lastEs().emit({ type: "model_changed" }); });
+  await settle();
+  assert.equal(w.latest.slowModeScope, undefined);
 });
 
 test("HTTP discovery of a new wrapper replaces an old still-open stream before hydrating it", async () => {
@@ -3070,4 +3177,111 @@ test("REVIEW a 404 boundary on a live session (unreadable file / wrapper died) s
   );
   assert.equal(w.latest.notices.length, 0, "no failed-send notice");
   t.diagnostic("boundary 404 tolerated on a live session");
+});
+
+// The incident behind abort_and_restore_queue: a promoted steer was still in
+// omp when Stop landed but missing from this client's snapshot, so nothing
+// withdrew it and omp ran it as a new turn after the abort. omp's atomic Esc
+// takes back everything it holds, listed here or not.
+test("Stop takes queued input back through omp in one step, including a steer the snapshot missed", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-atomic");
+  primeSession("abort-atomic", [userMsg("u0", "loaded question")]);
+  const { w } = await startRun("abort-atomic", "hello agent");
+  world.abortRestoreQueue = {
+    steering: [{ text: "steer the snapshot missed" }],
+    followUp: [{ text: "later follow-up", images: [{ type: "image", data: "x", mimeType: "image/png" }] }],
+  };
+
+  await act(async () => { await w.latest.handleAbort(); });
+
+  const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
+  assert.equal(commands.filter((type) => type === "abort_and_restore_queue").length, 1);
+  assert.equal(commands.includes("abort"), false, "omp's own abort already stopped the run");
+  assert.equal(commands.includes("remove_queued_message"), false);
+  assert.equal(getDraft("abort-atomic")?.value, "steer the snapshot missed\n\nlater follow-up");
+  assert.deepEqual(w.latest.notices, []);
+  clearDraft("abort-atomic");
+});
+
+const isAtomicStop = (method, _url, body) => method === "POST" && body?.type === "abort_and_restore_queue";
+
+test("a failed atomic Stop is retried once and restores what omp still held", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-atomic-retry");
+  primeSession("abort-atomic-retry", [userMsg("u0", "loaded question")]);
+  const { w } = await startRun("abort-atomic-retry", "hello agent");
+  world.holds.push({ match: isAtomicStop, produce: async () => ({ status: 502, value: { error: "Bad Gateway" } }) });
+  world.abortRestoreQueue = { steering: [{ text: "retry me" }], followUp: [] };
+
+  await act(async () => { await w.latest.handleAbort(); });
+
+  const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
+  assert.equal(commands.filter((type) => type === "abort_and_restore_queue").length, 2);
+  assert.equal(commands.includes("abort"), false, "a failure is not mistaken for an omp without the command");
+  assert.equal(commands.includes("remove_queued_message"), false);
+  assert.equal(getDraft("abort-atomic-retry")?.value, "retry me");
+  assert.deepEqual(w.latest.notices, []);
+  clearDraft("abort-atomic-retry");
+});
+
+test("an atomic Stop whose texts were lost with a failed response warns", async () => {
+  resetWorld();
+  primeSession("abort-atomic-lost", [userMsg("u0", "loaded question")]);
+  const { w } = await startRun("abort-atomic-lost", "hello agent");
+  // omp withdrew and aborted, but the answer never arrived; the queue is empty now.
+  world.holds.push({ match: isAtomicStop, produce: async () => ({ status: 502, value: { error: "Bad Gateway" } }) });
+  world.abortRestoreQueue = { steering: [], followUp: [] };
+
+  await act(async () => { await w.latest.handleAbort(); });
+
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false);
+  assert.deepEqual(w.latest.notices.map((n) => n.type), ["warning"]);
+});
+
+test("a failed atomic Stop never retries into a run started after the click", async () => {
+  resetWorld();
+  primeSession("abort-atomic-fenced", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-atomic-fenced", "hello agent");
+  let release;
+  world.holds.push({ match: isAtomicStop, produce: () => new Promise((resolve) => { release = resolve; }) });
+  world.abortRestoreQueue = { steering: [], followUp: [] };
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("next prompt"); await sleep(30); });
+  await act(async () => { lastEs().open(); await sending; });
+  await act(async () => {
+    release({ status: 502, value: { error: "Bad Gateway" } });
+    await stop;
+  });
+
+  assert.equal(world.calls.some((c) => c.body?.type === "prompt" && c.body?.message === "next prompt"), true);
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort_and_restore_queue").length, 1, "no retry into the new run");
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "nor a fallback abort");
+});
+
+test("overlapping Stops share one atomic withdrawal; an image-only entry does not come back as text", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-atomic-twice");
+  primeSession("abort-atomic-twice", [userMsg("u0", "loaded question")]);
+  const { w } = await startRun("abort-atomic-twice", "hello agent");
+  world.abortRestoreQueue = {
+    steering: [{ text: "[Image]", images: [{ type: "image", data: "x", mimeType: "image/png" }] }],
+    followUp: [{ text: "words" }],
+  };
+
+  await act(async () => { await Promise.all([w.latest.handleAbort(), w.latest.handleAbort()]); });
+
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort_and_restore_queue").length, 1);
+  assert.equal(getDraft("abort-atomic-twice")?.value, "words");
+  clearDraft("abort-atomic-twice");
 });

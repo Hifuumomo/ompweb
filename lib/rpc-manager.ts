@@ -1305,7 +1305,10 @@ export class AgentSessionWrapper {
       // The wrapper's own flag is only the spawn-time cache.
       fastModeEnabled: state.fastModeEnabled ?? state.fastMode ?? this.fastModeEnabled,
       fastModeActive: state.fastModeActive,
-      anthropicSlowMode: state.anthropicSlowMode,
+      slowModeSupported: state.slowModeSupported ?? false,
+      slowModeEnabled: state.slowModeEnabled ?? false,
+      slowModeScope: state.slowModeScope,
+      usageLimit: state.usageLimit,
       todoPhases: state.todoPhases ?? [],
       extensionStatuses: Array.from(this.extensionStatuses, ([key, text]) => ({ key, text })),
       extensionWidgets: Array.from(this.extensionWidgets.values()),
@@ -1519,11 +1522,14 @@ export class AgentSessionWrapper {
         return result ?? null;
       }
 
+      // abort_and_restore_queue is omp's Esc: it takes queued user input back
+      // atomically, then aborts, and returns the withdrawn messages.
       case "abort":
+      case "abort_and_restore_queue": {
         this.responseObserved = false;
         this.responseRunActive = false;
-        await this.withFinalRunningNotification(async () => {
-          await this.proc.sendCommand({ type: "abort" });
+        const result = await this.withFinalRunningNotification(async () => {
+          const response: unknown = await this.proc.sendCommand({ type });
           // If the prompt was aborted before the agent loop started, no
           // agent_end will arrive to clear the flag; the streaming flag still
           // tracks a live turn that ends with its own agent_end.
@@ -1536,8 +1542,10 @@ export class AgentSessionWrapper {
           this.awaitingAgentStartDeadline = 0;
           this.continuationGraceUntil = 0;
           this.clearLiveSnapshots();
+          return response;
         });
-        return null;
+        return type === "abort" ? null : result ?? null;
+      }
 
       case "get_state": {
         try {
@@ -1565,6 +1573,12 @@ export class AgentSessionWrapper {
         const result = await this.proc.sendCommand<{ enabled?: boolean; active?: boolean }>({ type: "set_fast_mode", enabled });
         this.fastModeEnabled = result?.enabled ?? enabled;
         return { enabled: this.fastModeEnabled, active: result?.active ?? false };
+      }
+
+      case "set_slow_mode": {
+        const enabled = command.enabled === true;
+        const result = await this.proc.sendCommand<{ enabled?: boolean }>({ type: "set_slow_mode", enabled });
+        return { enabled: result?.enabled ?? enabled };
       }
 
       case "fork": {

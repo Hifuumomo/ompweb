@@ -2,7 +2,6 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { isSttAfter, type SttAfter } from "@/lib/stt";
-import { fetchWithTimeout, sleep } from "@/lib/abort-signal";
 
 export interface UseDictationOptions {
   /** `after` is the send/queue choice made when the recording was sent, if any. */
@@ -223,22 +222,30 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
           failTranscription("Transcription timed out");
           return;
         }
-        await sleep(delay);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
         delay = STT_POLL_INTERVAL_MS;
         if (stale()) return;
         const claimUrl = `${jobUrl}?claim=${encodeURIComponent((claimTokenRef.current ??= randomToken()))}&owner=${encodeURIComponent(ownerToken())}`;
         // Per-request timeout: a stalled request must not freeze the loop past its deadline.
-        const res = await fetchWithTimeout(claiming ? claimUrl : jobUrl, STT_POLL_REQUEST_TIMEOUT_MS, {
+        const requestController = new AbortController();
+        const abortRequest = () => requestController.abort();
+        signal.addEventListener("abort", abortRequest, { once: true });
+        const timeout = window.setTimeout(abortRequest, STT_POLL_REQUEST_TIMEOUT_MS);
+        const result = await fetch(claiming ? claimUrl : jobUrl, {
           method: claiming ? "DELETE" : "GET",
+          signal: requestController.signal,
           cache: "no-store",
-        }, signal).catch((err: unknown) => {
-          if (signal.aborted) throw err;
-          return null;
-        });
+        }).then(async (res) => ({ res, job: await res.json().catch(() => null) }))
+          .catch((err: unknown) => {
+            if (signal.aborted) throw err;
+            return null;
+          }).finally(() => {
+            window.clearTimeout(timeout);
+            signal.removeEventListener("abort", abortRequest);
+          });
         if (stale()) return;
-        if (!res) continue;
-        const job = await res.json().catch(() => null);
-        if (stale()) return;
+        if (!result) continue;
+        const { res, job } = result;
         if (res.status === 404) {
           // Server restarted, the job expired, or its tombstone was pruned
           // after another browser took it. Only local audio can be retried,

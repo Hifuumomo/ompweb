@@ -90,7 +90,6 @@ app/api/
 
 lib/
   omp/                 shared omp foundations (paths, CLI probe, RpcProcess)
-  abort-signal.ts      browser-safe fetch timeout / abort helpers (no AbortSignal.timeout/any)
   provider-accounts.ts distinct omp accounts per provider from `omp usage` reports (Models → provider detail)
   agent-client.ts      typed fetch helper for /api/agent commands
   btw.ts               /btw side-question records + pure frame/snapshot merge (order-safe)
@@ -211,8 +210,8 @@ hooks/
 ### Browser compatibility
 Client code (`components/`, `hooks/`) must not call `AbortSignal.timeout`,
 `AbortSignal.any` or `Promise.withResolvers` — older mobile browsers throw and
-the whole tree shows the "unexpected error" screen. Use `lib/abort-signal.ts`
-(`fetchWithTimeout`, `timeoutSignal`, `sleep`). Server code may use them freely.
+the whole tree shows the "unexpected error" screen. Use `AbortController` + timers and
+executor-style promises instead. Server code may use them freely.
 
 ### Two kinds of branching — don't confuse them
 - **Fork** ("Fork a new session from this point" button, `messageView.newSessionTitle`, on user and assistant messages; only offered while the session is idle — ChatWindow gates it on `!sessionBusy && !isNew`): creates a new independent `.jsonl` file via omp's `branch` RPC. Shown as a child in the sidebar tree via `parentSession` header field. `branch` only takes a user entry and keeps the history *before* it, so `lib/chat-fork.ts` maps rows: a user prompt forks at itself and its returned text prefills the fork's composer (edit-and-resend, text only — attached images are not restored); an assistant reply forks at the next user prompt so the reply is kept; the newest reply falls back to its own prompt with the prefill. Rows that would edit the very first prompt (an empty fork) offer no fork.
@@ -260,16 +259,23 @@ a number when requested and applies only if no newer snapshot or
 `queue_update` was applied (HTTP and SSE can reorder). Edit/Delete use
 `remove_queued_message` (act only on `removed: true`), Steer uses
 `promote_queued_message`; the chip changes when omp's next snapshot arrives.
-`handleAbort` coalesces overlapping Stops, then withdraws pending messages BEFORE sending `abort` (bounded by
-`WITHDRAW_BEFORE_ABORT_MS`), like the TUI's Esc: omp runs a queued steer as
-soon as an abort lands. Withdrawn text goes to the session draft via
-`recoverDraftText`, saved as each removal confirms. A follow-up that answers
-`removed: false` is retried on `steering` (a concurrent promotion moved it);
-never the reverse. The abort is fenced to the prompt run id captured at Stop,
-so it cannot kill a prompt started during the wait. Known gap: input taken by
-live steering answers `removed: false`, and RPC `abort` does not call
-`withdrawLiveSteering` (the TUI's `clearQueue({ forInterrupt: true })` does),
-so omp requeues it on abort and runs it next; omp-web cannot prevent that.
+`handleAbort` coalesces overlapping Stops, then sends `abort_and_restore_queue`:
+omp's Esc (`clearQueue({ forInterrupt: true })`, then abort) in one step,
+returning the withdrawn user messages, which go to the session draft via
+`recoverDraftText`. It covers what a client snapshot cannot: a steer promoted
+after the last `queue_update`, and live-steered input the run claimed but never
+recorded (omp would otherwise requeue it and drain it into a new turn right
+after the abort). Never reimplement this client-side. A failed request is
+retried once (omp returns whatever is still queued) and only while the run
+captured at the click is current; texts lost with a response that never
+arrived cannot be recovered, so the hook warns (`queueRestoreUncertain`).
+Fallback ONLY when omp answers "Unknown command" (omp without the command):
+withdraw each listed message with `remove_queued_message` BEFORE sending
+`abort` (bounded by `WITHDRAW_BEFORE_ABORT_MS`), saved as each removal
+confirms. A follow-up that answers `removed: false` is retried on `steering`
+(a concurrent promotion moved it); never the reverse. Every abort is fenced to
+the prompt run id captured at the click, so it cannot kill a prompt started
+during the wait.
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.

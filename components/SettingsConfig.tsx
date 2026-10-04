@@ -18,7 +18,6 @@ import { useFontSize, type FontSizePreference } from "@/hooks/useFontSize";
 import { useUiScale, type UiScalePreference } from "@/hooks/useUiScale";
 import { useTouchTargets, type TouchTargetsPreference } from "@/hooks/useTouchTargets";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
-import { fetchWithTimeout } from "@/lib/abort-signal";
 const SettingsTabLoading = () => {
   const { t } = useI18n();
   return <div role="status" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>{t("settingsConfig.loadingSettings")}</div>;
@@ -50,6 +49,7 @@ type WindowsServiceStatus = {
 
 type NativeSettings = {
   defaultThinkingLevel?: "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  providers?: { autoThinkingSource?: "classifier" | "vendor" };
   hideThinkingBlock?: boolean;
   externalThinking?: boolean;
   textVerbosity?: "low" | "medium" | "high";
@@ -159,6 +159,7 @@ const SETTING_INDEX: SettingIndexEntry[] = [
   { id: "extension-tool-requests", tab: "safety", sectionKey: "settingsConfig.toolSafetyApprovals", labelKey: "settingsConfig.extensionToolRequests", descKey: "settingsConfig.extensionToolRequestsDesc", fallbackSection: "Tool Safety & Approvals", fallbackLabel: "Extension Tool Requests", fallbackDesc: "Automatically approve extension tool authorization requests.", scope: "Native OMP" },
   // AI Model Defaults
   { id: "reasoning", tab: "models", sectionKey: "settingsConfig.modelDefaults", labelKey: "settingsConfig.reasoning", descKey: "settingsConfig.reasoningDesc", fallbackSection: "AI Model Defaults", fallbackLabel: "Reasoning", fallbackDesc: "Default effort level for thinking-capable models.", scope: "Native OMP" },
+  { id: "auto-thinking-source", tab: "models", sectionKey: "settingsConfig.modelDefaults", labelKey: "settingsConfig.autoThinkingSource", descKey: "settingsConfig.autoThinkingSourceDesc", fallbackSection: "AI Model Defaults", fallbackLabel: "Auto Thinking Source", fallbackDesc: "Choose prompt classification or the publisher default with omp fallback.", scope: "Native OMP" },
   { id: "verbosity", tab: "models", sectionKey: "settingsConfig.modelDefaults", labelKey: "settingsConfig.verbosity", descKey: "settingsConfig.verbosityDesc", fallbackSection: "AI Model Defaults", fallbackLabel: "Verbosity", fallbackDesc: "Response detail level for supporting providers.", scope: "Native OMP" },
   { id: "personality", tab: "models", sectionKey: "settingsConfig.modelDefaults", labelKey: "settingsConfig.personality", descKey: "settingsConfig.personalityDesc", fallbackSection: "AI Model Defaults", fallbackLabel: "Personality", fallbackDesc: "Style included in OMP's system prompt.", scope: "Native OMP" },
   { id: "thinking-blocks", tab: "models", sectionKey: "settingsConfig.modelDefaults", labelKey: "settingsConfig.thinkingBlocks", descKey: "settingsConfig.thinkingBlocksDesc", fallbackSection: "AI Model Defaults", fallbackLabel: "Hide Thinking Blocks", fallbackDesc: "Hide model reasoning from output view.", scope: "Native OMP" },
@@ -739,13 +740,18 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
     nativeSettingsMutatedRef.current = false;
     setNativeSettingsLoading(true);
     setNativeSettingsError(null);
-    fetchWithTimeout("/api/omp-settings", 12000)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    fetch("/api/omp-settings", { signal: controller.signal })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data: { settings?: NativeSettings }) => {
         if (!nativeSettingsMutatedRef.current) setNativeSettings(data.settings ?? {});
       })
       .catch((error) => setNativeSettingsError(error instanceof Error ? error.message : String(error)))
-      .finally(() => setNativeSettingsLoading(false));
+      .finally(() => {
+        clearTimeout(timeout);
+        setNativeSettingsLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -911,6 +917,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
       }
     }
     for (const setting of SETTING_INDEX) {
+      if (setting.id === "auto-thinking-source" && nativeSettings?.defaultThinkingLevel !== "auto") continue;
       const trLabel = t(setting.labelKey);
       const trDesc = t(setting.descKey);
       const trSection = t(setting.sectionKey);
@@ -923,7 +930,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
       }
     }
     return results;
-  }, [trimmedQuery, t]);
+  }, [trimmedQuery, t, nativeSettings?.defaultThinkingLevel]);
 
   const openSearchResult = useCallback((result: SearchResult) => {
     startTransition(() => onSelectTab(result.tab));
@@ -1264,6 +1271,20 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                       ))}
                     </select>
                   </NativeSetting>
+                  {nativeSettings?.defaultThinkingLevel === "auto" && (
+                    <NativeSetting searchId="auto-thinking-source" label={t("settingsConfig.autoThinkingSource")} description={t("settingsConfig.autoThinkingSourceDesc")} scope="Native OMP">
+                      <select
+                        style={nativeSelectStyle}
+                        value={nativeSettings.providers?.autoThinkingSource ?? "classifier"}
+                        onChange={(e) => patchSection("providers", {
+                          autoThinkingSource: e.target.value === "vendor" ? "vendor" : "classifier",
+                        })}
+                      >
+                        <option value="classifier" style={nativeOptionStyle}>{t("settingsConfig.autoThinkingClassifier")}</option>
+                        <option value="vendor" style={nativeOptionStyle}>{t("settingsConfig.autoThinkingVendor")}</option>
+                      </select>
+                    </NativeSetting>
+                  )}
                   <NativeSetting searchId="verbosity" label={t("settingsConfig.verbosity")} description={t("settingsConfig.verbosityDesc")} scope="Native OMP">
                     <select
                       style={nativeSelectStyle}

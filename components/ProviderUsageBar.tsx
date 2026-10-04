@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronRight, Gauge } from "lucide-react";
+import { Check, ChevronRight, Gauge, RefreshCw } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { formatUsageReset, usageTone, useProviderUsage } from "./AppShell-provider-usage";
 import type { ProviderUsageReport, ProviderUsageWindow } from "@/lib/provider-usage-types";
+import { SidebarIconButton } from "./SessionSidebar-chrome";
+import { Tooltip } from "./ui/primitives";
 
 interface WindowDef {
   short: string;
@@ -63,7 +65,13 @@ function DetailMeter({ short, window, t }: {
 // slim row per account (worst window only), click to expand the full detail.
 export function ProviderUsageBar() {
   const { t } = useI18n();
-  const { snapshot, loading, error } = useProviderUsage("", 5 * 60_000);
+  const { snapshot, loading, error, refresh } = useProviderUsage("", 5 * 60_000);
+  const [refreshDone, setRefreshDone] = useState(false);
+  useEffect(() => {
+    if (!refreshDone) return;
+    const timer = window.setTimeout(() => setRefreshDone(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [refreshDone]);
   const reports = snapshot?.reports ?? [];
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   // The first render must match the server, where localStorage is unavailable,
@@ -102,6 +110,7 @@ export function ProviderUsageBar() {
         overflowY: "auto",
       }}
     >
+      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
       <button
         type="button"
         onClick={() => setCollapsed((v) => {
@@ -119,7 +128,7 @@ export function ProviderUsageBar() {
           display: "flex",
           alignItems: "center",
           gap: 7,
-          width: "100%",
+          flex: 1,
           boxSizing: "border-box",
           padding: "0 4px",
           minWidth: 0,
@@ -156,6 +165,24 @@ export function ProviderUsageBar() {
                 : t("appShell.providerUsageNoData")}
         </span>
       </button>
+        <Tooltip content={t("sessionSidebar.refresh")} side="top">
+          <SidebarIconButton
+            label={t("sessionSidebar.refresh")}
+            active={refreshDone}
+            disabled={loading}
+            onClick={() => {
+              setRefreshDone(false);
+              void refresh().then(setRefreshDone);
+            }}
+          >
+            {refreshDone ? (
+              <Check size={14} strokeWidth={2.2} aria-hidden="true" />
+            ) : (
+              <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
+            )}
+          </SidebarIconButton>
+        </Tooltip>
+      </div>
       {!collapsed && reports.map((report, index) => {
         const account = report.accountLabel ?? t("appShell.account", { number: report.accountIndex ?? index + 1 });
         const key = `${report.provider}:${account}:${report.modelId ?? "all"}:${index}`;
