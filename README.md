@@ -40,8 +40,9 @@ Skill startup notices require an OMP runtime with `get_skill_diagnostics`,
 redundant installations appear above the composer when its OMP session starts;
 an empty new-chat page does not start OMP just for diagnostics. **Details** shows
 the resolved default, variants, identical copies, backing paths, sources, and
-selection reason. **Turn off startup notices** and **Settings → Interface &
-Behavior → Skill startup notices** use OMP's persisted
+selection reason. The **×** button dismisses the notice for that session until
+the reported conflicts change. **Turn this off** and **Settings →
+Interface & Behavior → Skill startup notices** use OMP's persisted
 `skills.showStartupDiagnostics` preference, not a separate browser setting.
 **Settings → Extensions & Tools → Skills → View skill diagnostics** remains
 available for a selected running session when notices are off. Inspection does
