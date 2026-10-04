@@ -30,6 +30,13 @@ export function selectableThinkingLevels(available: readonly string[] | null | u
   return [...ordered, ...remaining];
 }
 
+/** The TUI's unicode status-line glyphs (omp `thinking.*`; off uses ⊘ in
+ *  place of the TUI's ⦸, which common phone fonts lack); provider-defined
+ *  extra levels have none and render as text. */
+export const THINKING_LEVEL_GLYPHS: Readonly<Record<string, string>> = {
+  auto: "⟳", off: "⊘", minimal: "○", low: "◔", medium: "◑", high: "◒", xhigh: "◕", max: "◉",
+};
+
 /** "off" is always a valid selector; concrete efforts come from the model. */
 export function thinkingLevelsForMeta(meta: ThinkingModelMeta): string[] {
   if (!meta.reasoning) return ["off"];

@@ -64,6 +64,21 @@ function readDocument() {
   return { path, doc };
 }
 
+/** omp's `/slow` for Claude: `providers.anthropic.slowMode: auto` (default off).
+ *  An unreadable config counts as off, like omp's default. */
+export function readAnthropicSlowMode(): boolean {
+  try {
+    const data = readDocument().doc.toJS();
+    if (!isRecord(data)) return false;
+    const providers = isRecord(data.providers) ? data.providers : {};
+    const anthropic = isRecord(providers.anthropic) ? providers.anthropic : {};
+    // omp's migration also accepts top-level dotted keys, nested values winning.
+    return (anthropic.slowMode ?? data["providers.anthropic.slowMode"]) === "auto";
+  } catch {
+    return false;
+  }
+}
+
 /** Returns the persisted native OMP values only; omitted keys keep OMP defaults. */
 export function readNativeSettings(): { path: string; settings: NativeSettings } {
   const { path, doc } = readDocument();
