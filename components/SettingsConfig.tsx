@@ -18,6 +18,7 @@ import { useFontSize, type FontSizePreference } from "@/hooks/useFontSize";
 import { useUiScale, type UiScalePreference } from "@/hooks/useUiScale";
 import { useTouchTargets, type TouchTargetsPreference } from "@/hooks/useTouchTargets";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { fetchWithTimeout } from "@/lib/abort-signal";
 const SettingsTabLoading = () => {
   const { t } = useI18n();
   return <div role="status" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>{t("settingsConfig.loadingSettings")}</div>;
@@ -738,7 +739,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
     nativeSettingsMutatedRef.current = false;
     setNativeSettingsLoading(true);
     setNativeSettingsError(null);
-    fetch("/api/omp-settings", { signal: AbortSignal.timeout(12000) })
+    fetchWithTimeout("/api/omp-settings", 12000)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data: { settings?: NativeSettings }) => {
         if (!nativeSettingsMutatedRef.current) setNativeSettings(data.settings ?? {});

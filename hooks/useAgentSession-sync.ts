@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "@/lib/abort-signal";
 import { historyCursor, type SessionHistoryCursor, type SessionLiveSnapshot, type SessionStreamCursor, type SessionSyncResponse } from "@/lib/session-sync";
 import type { SessionContext } from "@/lib/types";
 import type { AgentEvent } from "./useAgentSession-stream";
@@ -92,7 +93,7 @@ export function createSessionCatchUp(options: {
             if (base) params.set("cursor", JSON.stringify(base));
             if (view.leafId) params.set("leafId", view.leafId);
             if (view.includePreCompaction) params.set("includePreCompaction", "1");
-            const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/context?${params}`, { signal: AbortSignal.timeout(30_000) });
+            const res = await fetchWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context?${params}`, 30_000);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const page = await res.json() as SessionSyncResponse;
             if (options.scope() !== scope || revision !== version || cursor !== publishedCursor || options.sessionId() !== sid) break;
