@@ -170,8 +170,8 @@ async function fetchProviderUsage(): Promise<string> {
   return stdout;
 }
 
-function getUsageOutput(): Promise<string> {
-  if (usageCache && usageCache.expiresAt > Date.now()) return Promise.resolve(usageCache.output);
+function getUsageOutput(refresh = false): Promise<string> {
+  if (!refresh && usageCache && usageCache.expiresAt > Date.now()) return Promise.resolve(usageCache.output);
   if (usageInFlight) return usageInFlight;
   usageInFlight = fetchProviderUsage()
     .then((output) => {
@@ -182,6 +182,6 @@ function getUsageOutput(): Promise<string> {
   return usageInFlight;
 }
 
-export async function getProviderUsage(query: UsageQuery = {}): Promise<ProviderUsageSnapshot> {
-  return parseProviderUsageOutput(await getUsageOutput(), query);
+export async function getProviderUsage(query: UsageQuery = {}, refresh = false): Promise<ProviderUsageSnapshot> {
+  return parseProviderUsageOutput(await getUsageOutput(refresh), query);
 }

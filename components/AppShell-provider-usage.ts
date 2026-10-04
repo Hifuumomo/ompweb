@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { ProviderUsageReport, ProviderUsageSnapshot } from "@/lib/provider-usage-types";
 
 export function formatUsageReset(value: number, unit: "minutes" | "hours"): string {
@@ -51,8 +51,10 @@ export type ProviderUsageState = {
   error: boolean;
 };
 
-export function useProviderUsage(query: string | null, refreshMs?: number): ProviderUsageState {
+export function useProviderUsage(query: string | null, refreshMs?: number): ProviderUsageState & { refresh: () => Promise<boolean> } {
   const [state, setState] = useState<ProviderUsageState>({ snapshot: null, loading: false, error: false });
+  const refreshRef = useRef<() => Promise<boolean>>(async () => false);
+  const refresh = useCallback(() => refreshRef.current(), []);
   useEffect(() => {
     if (query === null) {
       setState({ snapshot: null, loading: false, error: false });
@@ -60,22 +62,37 @@ export function useProviderUsage(query: string | null, refreshMs?: number): Prov
     }
     const controller = new AbortController();
     setState({ snapshot: null, loading: true, error: false });
-    const load = async () => {
-      try {
-        const response = await fetch(`/api/provider-usage${query ? `?${query}` : ""}`, { signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const snapshot = await response.json() as ProviderUsageSnapshot;
-        if (!controller.signal.aborted) setState({ snapshot, loading: false, error: false });
-      } catch {
-        if (!controller.signal.aborted) setState({ snapshot: null, loading: false, error: true });
-      }
+    let inFlight: Promise<boolean> | undefined;
+    const load = (force = false): Promise<boolean> => {
+      if (inFlight) return inFlight;
+      setState((previous) => ({ ...previous, loading: true, error: false }));
+      const params = new URLSearchParams(query);
+      if (force) params.set("refresh", "true");
+      inFlight = (async () => {
+        try {
+          const response = await fetch(`/api/provider-usage${params.size ? `?${params}` : ""}`, { signal: controller.signal });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const snapshot = await response.json() as ProviderUsageSnapshot;
+          if (controller.signal.aborted) return false;
+          setState({ snapshot, loading: false, error: false });
+          return true;
+        } catch {
+          if (!controller.signal.aborted) setState({ snapshot: null, loading: false, error: true });
+          return false;
+        } finally {
+          inFlight = undefined;
+        }
+      })();
+      return inFlight;
     };
+    refreshRef.current = () => load(true);
     void load();
     const interval = refreshMs ? window.setInterval(() => void load(), refreshMs) : undefined;
     return () => {
+      refreshRef.current = async () => false;
       controller.abort();
       if (interval !== undefined) window.clearInterval(interval);
     };
   }, [query, refreshMs]);
-  return state;
+  return { ...state, refresh };
 }
