@@ -18,6 +18,7 @@ import {
 import { markShuttingDown, recordRunningSessions, RESUME_PROMPT, takeInterruptedSessions } from "./session-resume";
 import { PRESET_FULL } from "./tool-presets";
 import { comparableProjectPath } from "./comparable-path";
+import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
 import { isReservedLaunchArg, loadProjectRegistry } from "./project-registry";
 import type {
@@ -81,6 +82,10 @@ const GET_STATE_TIMEOUT_MS = 5_000;
  * stay pending forever. Generous enough to cover slow local startup work the
  * child does before acking. */
 const PROMPT_ACK_TIMEOUT_MS = 30_000;
+/** Title generation is an LLM call on omp's side. */
+const GENERATE_TITLE_TIMEOUT_MS = 60_000;
+const RENAME_POLL_INTERVAL_MS = 500;
+const RENAME_POLL_TIMEOUT_MS = 20_000;
 const NON_TERMINAL_CONTINUATION_GRACE_MS = 2_000;
 const AWAITING_AGENT_START_TIMEOUT_MS = 10_000;
 const RESTARTING_MESSAGE = "This session is restarting — retry in a moment.";
@@ -274,6 +279,16 @@ function patchEstimatedTokensAfter(result: unknown): void {
 // the app expects (same command surface pi-web's in-process wrapper offered).
 // ============================================================================
 
+function titleFromResult(result: unknown): string | null {
+  const value = typeof result === "string" ? result : isRecord(result) ? (result.title ?? result.name ?? result.sessionName) : null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+interface IdentityChangeOptions {
+  /** The old id still names this wrapper (session moved files, not switched). */
+  keepOldId?: boolean;
+}
+
 export class AgentSessionWrapper {
   private listeners: EventListener[] = [];
   private pendingUiRequests = new Map<string, UnsequencedAgentEvent>();
@@ -308,7 +323,10 @@ export class AgentSessionWrapper {
   private handshaking = false;
   private readonly disconnectDestroyMs: number;
   private onDestroyCallback: (() => void) | null = null;
-  private onIdentityChangeCallback: ((oldId: string, newId: string) => void) | null = null;
+  private onIdentityChangeCallback: ((oldId: string, newId: string, options?: IdentityChangeOptions) => void) | null = null;
+  /** omp reported a `session-persistence` notice: its next identity change is
+   * the same conversation moving to a sibling file, not a session switch. */
+  private sessionMovePending = false;
   private unsubscribeFrames: (() => void) | null = null;
   private initPromise: Promise<void> | null = null;
   private restarting = false;
@@ -521,7 +539,13 @@ export class AgentSessionWrapper {
   }
 
   private applyIdentity(state: RpcSessionState): void {
-    if (this._sessionId && (state.sessionId !== this._sessionId || (state.sessionFile && state.sessionFile !== this._sessionFile))) {
+    const oldId = this._sessionId;
+    const identityChanged = Boolean(oldId) && (state.sessionId !== oldId || (state.sessionFile && state.sessionFile !== this._sessionFile));
+    // omp >= 18.5 moves a session it does not own onto a new file on its first
+    // write (`session-persistence` notice). The conversation continues, so the
+    // live stream and run state must survive; only the id changes.
+    const moved = identityChanged && this.sessionMovePending;
+    if (identityChanged && !moved) {
       this.resetStream();
       this.promptRunning = false;
       this.awaitingAgentStart = false;
@@ -535,6 +559,84 @@ export class AgentSessionWrapper {
     this.compacting = state.isCompacting;
     this.fastModeEnabled = state.fastModeEnabled ?? state.fastMode ?? this.fastModeEnabled;
     if (this._sessionFile) cacheSessionPath(this._sessionId, this._sessionFile);
+    if (moved) {
+      this.sessionMovePending = false;
+      if (oldId !== this._sessionId) {
+        // Keep the old id routable: other tabs still address it, and a fresh
+        // `--resume` of the old file would fork again (its owner lives on).
+        this.onIdentityChangeCallback?.(oldId, this._sessionId, { keepOldId: true });
+        this.invalidateSessionLists();
+      }
+    }
+  }
+
+  /** Whether omp answered `generate_title` with "Unknown command" (cached per child). */
+  private generateTitleUnsupported = false;
+
+  /**
+   * Ask omp to generate a title for this session with its own title generator.
+   * Prefers the native `generate_title` RPC command and falls back to the
+   * argument-less `/rename` slash command. Returns null when omp cannot do
+   * either right now (older omp, or the session is mid-run, where `/rename`
+   * would be queued as a prompt).
+   */
+  async generateTitle(): Promise<string | null> {
+    if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
+    if (!this.isAlive()) throw new Error("Session is no longer running");
+
+    if (!this.generateTitleUnsupported) {
+      try {
+        const result = await this.proc.sendCommand<unknown>({ type: "generate_title" }, GENERATE_TITLE_TIMEOUT_MS);
+        const title = titleFromResult(result) ?? (await this.readSessionName());
+        if (title) this.adoptSessionName(title);
+        return title;
+      } catch (error) {
+        if (!(error instanceof Error && error.message.includes("Unknown command"))) throw error;
+        this.generateTitleUnsupported = true;
+      }
+    }
+
+    // `/rename` without arguments generates a title (omp >= 18.6). It is a
+    // prompt, so it must never be sent while a run is in flight.
+    if (this.isRunning()) return null;
+    const before = (await this.readSessionName()) ?? "";
+    await this.send({ type: "prompt", message: "/rename" });
+    const deadline = Date.now() + RENAME_POLL_TIMEOUT_MS;
+    let title = await this.readSessionName();
+    while (!(title && title !== before) && Date.now() < deadline && this.isAlive()) {
+      await new Promise((resolve) => setTimeout(resolve, RENAME_POLL_INTERVAL_MS));
+      title = await this.readSessionName();
+    }
+    if (title) this.adoptSessionName(title);
+    return title;
+  }
+
+  private async readSessionName(): Promise<string | null> {
+    const state = await this.getStateWithTimeout();
+    const name = typeof state.sessionName === "string" ? state.sessionName.trim() : "";
+    return name || null;
+  }
+
+  private adoptSessionName(title: string): void {
+    this._sessionName = title;
+    this.invalidateSessionLists();
+    notifyRunningChange({ refreshSessionList: true });
+  }
+
+  /** Re-read identity after omp reported that it moved this session to a new file. */
+  private async followSessionMove(): Promise<void> {
+    this.sessionMovePending = true;
+    try {
+      const state = await this.getStateWithTimeout();
+      if (this._alive) this.applyIdentity(state);
+    } catch {
+      // The next get_state-driven refresh still applies the pending move.
+    } finally {
+      // A persistence warning that is not a move changes no identity; do not
+      // let it mask a later genuine session switch.
+      if (this.sessionMovePending && this._alive) this.sessionMovePending = false;
+      notifyRunningChange({ refreshSessionList: true });
+    }
   }
 
   handleProcessExit(
@@ -625,6 +727,9 @@ export class AgentSessionWrapper {
         // event.result.estimatedTokensAfter for the banner.
         patchEstimatedTokensAfter(event.result);
         this.invalidateSessionLists();
+        break;
+      case "notice":
+        if (event.source === "session-persistence") void this.followSessionMove();
         break;
       case "session_info_update":
         if (typeof event.title === "string") this._sessionName = event.title;
@@ -1043,7 +1148,7 @@ export class AgentSessionWrapper {
   }
 
   /** Called when a session-changing command re-keyed this wrapper (branch/new_session/switch_session). */
-  onIdentityChange(cb: (oldId: string, newId: string) => void): void {
+  onIdentityChange(cb: (oldId: string, newId: string, options?: IdentityChangeOptions) => void): void {
     this.onIdentityChangeCallback = cb;
   }
 
@@ -1937,6 +2042,18 @@ export async function startRpcSession(
   // race on resume/delete/archive.
   if (existing?.destroyPromise) await existing.destroyPromise;
 
+  // omp >= 18.5 lets only one process own a session file; a second `--resume`
+  // child would fork into a new nested session on its first write. Reuse the
+  // live wrapper that already reports this file (e.g. after it moved files).
+  if (sessionFile && !existing) {
+    for (const candidate of new Set(registry.values())) {
+      if (candidate.isAlive() && candidate.sessionFile && samePath(candidate.sessionFile, sessionFile)) {
+        registry.set(sessionId, candidate);
+        return { session: candidate, realSessionId: candidate.sessionId };
+      }
+    }
+  }
+
   const inflight = locks.get(sessionId);
   if (inflight) return inflight;
 
@@ -1983,11 +2100,11 @@ export async function startRpcSession(
 
     const realSessionId = created.sessionId;
     created.onDestroy(() => {
-      if (registry.get(created.sessionId) === created) registry.delete(created.sessionId);
-      if (registry.get(realSessionId) === created) registry.delete(realSessionId);
+      // Drop every key (current id, original id, moved-from aliases).
+      for (const [key, wrapper] of registry) if (wrapper === created) registry.delete(key);
     });
-    created.onIdentityChange((oldId, newId) => {
-      if (registry.get(oldId) === created) registry.delete(oldId);
+    created.onIdentityChange((oldId, newId, options) => {
+      if (!options?.keepOldId && registry.get(oldId) === created) registry.delete(oldId);
       registry.set(newId, created);
     });
     registry.set(realSessionId, created);
