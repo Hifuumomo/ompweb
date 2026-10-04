@@ -63,14 +63,20 @@ export function useProviderUsage(query: string | null, refreshMs?: number): Prov
     const controller = new AbortController();
     setState({ snapshot: null, loading: true, error: false });
     let inFlight: Promise<boolean> | undefined;
+    let inFlightForced = false;
     const load = (force = false): Promise<boolean> => {
-      if (inFlight) return inFlight;
-      setState((previous) => ({ ...previous, loading: true, error: false }));
+      if (controller.signal.aborted) return Promise.resolve(false);
+      if (inFlight) {
+        return force && !inFlightForced ? inFlight.then(() => load(true)) : inFlight;
+      }
+      if (force) setState((previous) => ({ ...previous, loading: true, error: false }));
       const params = new URLSearchParams(query);
       if (force) params.set("refresh", "true");
+      const queryString = params.toString();
+      inFlightForced = force;
       inFlight = (async () => {
         try {
-          const response = await fetch(`/api/provider-usage${params.size ? `?${params}` : ""}`, { signal: controller.signal });
+          const response = await fetch(`/api/provider-usage${queryString ? `?${queryString}` : ""}`, { signal: controller.signal });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const snapshot = await response.json() as ProviderUsageSnapshot;
           if (controller.signal.aborted) return false;
