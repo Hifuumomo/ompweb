@@ -429,7 +429,7 @@ export interface AttachedImage {
 }
 
 export type SelectedModel = { provider: string; modelId: string };
-export type ModelEntry = { id: string; name: string; provider: string; supportsFastMode?: boolean; contextWindow?: number; maxTokens?: number };
+export type ModelEntry = { id: string; name: string; provider: string; supportsFastMode?: boolean; supportsSlowMode?: boolean; contextWindow?: number; maxTokens?: number };
 export type ModelsResponse = {
   models: Record<string, string>;
   modelList?: ModelEntry[];
@@ -437,6 +437,8 @@ export type ModelsResponse = {
   thinkingLevels?: Record<string, string[]>;
   thinkingLevelMaps?: Record<string, Record<string, string | null>>;
   modelError?: string;
+  /** omp's `providers.anthropic.slowMode` is `auto` (read fresh per request). */
+  anthropicSlowMode?: boolean;
 };
 
 export type SlashCommandsResponse = {

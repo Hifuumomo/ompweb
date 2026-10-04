@@ -233,9 +233,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [fastModeActive, setFastModeActive] = useState<boolean | undefined>(undefined);
   // `/slow` for the active model, as omp reports it: false whenever the model
   // cannot use it, so it is re-read from every state, never carried over.
-  const [slowModeSupported, setSlowModeSupported] = useState(false);
-  const [slowModeEnabled, setSlowModeEnabled] = useState(false);
-  const [slowModeScope, setSlowModeScope] = useState<SlowModeScope | undefined>(undefined);
+  // Undefined support = no live omp state; the composer then falls back to
+  // the model catalog (see slowModeSupported below).
+  const [liveSlowModeSupported, setSlowModeSupported] = useState<boolean | undefined>(undefined);
+  const [liveSlowModeEnabled, setSlowModeEnabled] = useState(false);
+  const [liveSlowModeScope, setSlowModeScope] = useState<SlowModeScope | undefined>(undefined);
+  // omp's shared `providers.anthropic.slowMode` setting, from /api/models.
+  const [anthropicSlowMode, setAnthropicSlowMode] = useState(false);
   // omp's provider usage-limit stage (wrap-up allowance / /slow low priority).
   const [usageLimit, setUsageLimit] = useState<UsageLimitState | undefined>(undefined);
   // Runtime session modes returned by get_state and changed via RPC
@@ -505,6 +509,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     [isNew, newSessionModel, newSessionDefaultModel, currentModelOverride, liveModelMeta, data?.context.model, pendingModel],
   );
 
+  // Without live omp state (new or idle session), predict omp's own answer
+  // from the catalog: Claude low priority is the shared config setting
+  // (global); the flex tier is per session and starts off.
+  const catalogSlowModel = liveSlowModeSupported === undefined && displayModel
+    ? modelList.find((m) => m.provider === displayModel.provider && m.id === displayModel.modelId && m.supportsSlowMode)
+    : undefined;
+  const slowModeSupported = liveSlowModeSupported ?? Boolean(catalogSlowModel);
+  const slowModeEnabled = catalogSlowModel ? catalogSlowModel.provider === "anthropic" && anthropicSlowMode : liveSlowModeEnabled;
+  const slowModeScope: SlowModeScope | undefined = catalogSlowModel
+    ? (catalogSlowModel.provider === "anthropic" ? "global" : "session")
+    : liveSlowModeScope;
+
   const sessionStats = useMemo(() => {
     if (sessionStatsOverride) return sessionStatsOverride;
     const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -742,7 +758,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setFastModeEnabled(agentState.state.fastModeEnabled);
       }
       setFastModeActive(agentState.state?.fastModeActive);
-      setSlowModeSupported(agentState.state?.slowModeSupported ?? false);
+      // No omp process: back to the catalog fallback.
+      setSlowModeSupported(agentState.running ? (agentState.state?.slowModeSupported ?? false) : undefined);
       setSlowModeEnabled(agentState.state?.slowModeEnabled ?? false);
       setSlowModeScope(agentState.state?.slowModeScope);
       setUsageLimit(agentState.state?.usageLimit);
@@ -842,7 +859,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
-          setSlowModeSupported(liveState.slowModeSupported ?? false);
+          setSlowModeSupported(agentState.running ? (liveState.slowModeSupported ?? false) : undefined);
           setSlowModeEnabled(liveState.slowModeEnabled ?? false);
           setSlowModeScope(liveState.slowModeScope);
           setUsageLimit(liveState.usageLimit);
@@ -856,6 +873,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.todoPhases !== undefined) setTodoPhases(liveState.todoPhases ?? []);
           applyQueueStateSnapshot(queueRevision, liveState.queuedMessages);
         } else if (!agentState.running) {
+          setSlowModeSupported(undefined);
           applyQueueStateSnapshot(queueRevision, null);
         }
         if (showLoading) setLoading(false);
@@ -3007,8 +3025,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, ensureNewSession, refreshLiveModelState]);
 
   const handleSlowModeChange = useCallback(async (enabled: boolean) => {
-    // The toggle only renders from live get_state, so a session always exists.
-    const sid = sessionIdRef.current;
+    // Before omp runs, the toggle comes from the catalog: spawn it like Fast.
+    const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current ?? await ensureNewSession();
     if (!sid) return;
     try {
       const result = await sendAgentCommand<{ enabled?: boolean }>(sid, { type: "set_slow_mode", enabled });
@@ -3018,7 +3036,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       console.error("Failed to change Slow mode:", error);
       addNotice({ type: "error", message: error instanceof Error ? error.message : String(error) });
     }
-  }, [addNotice, refreshLiveModelState]);
+  }, [addNotice, ensureNewSession, refreshLiveModelState]);
 
   /** Toggle automatic retry for transient model failures. */
   const handleAutoRetryChange = useCallback(async (enabled: boolean) => {
@@ -3179,6 +3197,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
       const nextModelList = d.modelList ?? [];
       setModelList(nextModelList);
+      setAnthropicSlowMode(d.anthropicSlowMode === true);
       if (isNew) {
         const match = d.defaultModel
           ? nextModelList.find((m) => m.id === d.defaultModel?.modelId && m.provider === d.defaultModel?.provider)

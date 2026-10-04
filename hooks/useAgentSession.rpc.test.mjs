@@ -138,7 +138,7 @@ async function fetchStub(url, init = {}) {
     });
   }
   if (/^\/api\/models/.test(u)) {
-    return jsonResponse(200, { models: {}, modelList: [], defaultModel: null });
+    return jsonResponse(200, world.models ?? { models: {}, modelList: [], defaultModel: null });
   }
   if ((m = u.match(/\/api\/agent\/([^/?#]+)/))) {
     const sid = decodeURIComponent(m[1]);
@@ -276,6 +276,7 @@ function resetWorld() {
   world.live.clear();
   world.views.clear();
   world.contextUnavailable = false;
+  world.models = undefined;
   world.wrappers.clear();
   world.btwHistory.clear();
 }
@@ -2781,6 +2782,30 @@ test("a refused set_slow_mode leaves the toggle as it was and shows omp's error"
   await act(async () => { await w.latest.handleSlowModeChange(true); });
   assert.equal(w.latest.slowModeEnabled, false);
   assert.deepEqual(w.latest.notices.map((n) => [n.type, n.message]), [["error", refusal]]);
+});
+
+test("before omp runs, Slow comes from the catalog and the Claude setting; live state then wins", async () => {
+  resetWorld();
+  world.models = {
+    models: {}, defaultModel: null, anthropicSlowMode: true,
+    modelList: [{ id: SLOW_MODEL.id, name: "Claude", provider: SLOW_MODEL.provider, supportsSlowMode: true }],
+  };
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.sessions.get("s1").model = { provider: SLOW_MODEL.provider, modelId: SLOW_MODEL.id };
+  const w = await mountSession("s1");
+  assert.equal(w.latest.slowModeSupported, true);
+  assert.equal(w.latest.slowModeEnabled, true);
+  assert.equal(w.latest.slowModeScope, "global");
+
+  // Clicking spawns omp; one that reports no support for the model hides it.
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "set_slow_mode",
+    produce: async () => { world.agents.set("s1", { running: true, state: { model: SLOW_MODEL, slowModeSupported: false } }); return { value: { success: true, data: { enabled: false } } }; },
+  });
+  await act(async () => { await w.latest.handleSlowModeChange(false); });
+  await settle();
+  assert.equal(w.latest.slowModeSupported, false);
+  assert.equal(w.latest.slowModeEnabled, false);
 });
 
 test("the Slow scope follows omp's state and clears with support", async () => {
