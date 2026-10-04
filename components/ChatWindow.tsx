@@ -1070,7 +1070,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       slowModeSupported={slowModeSupported}
       slowModeEnabled={slowModeEnabled}
       slowModeScope={slowModeScope}
-      onSlowModeChange={session ? handleSlowModeChange : undefined}
+      onSlowModeChange={session || isNew ? handleSlowModeChange : undefined}
       onAbortRetry={session ? handleAbortRetry : undefined}
       availableThinkingLevels={availableThinkingLevels}
       thinkingLevelMap={currentThinkingLevelMap}

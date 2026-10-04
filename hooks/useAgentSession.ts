@@ -2973,6 +2973,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
         if (!sid) return;
         await sendAgentCommand(sid, { type: "set_model", provider, modelId });
+        // A spawned new session reports /slow support per model.
+        await refreshLiveModelState(sid);
         return;
       }
       const sid = sessionIdRef.current;

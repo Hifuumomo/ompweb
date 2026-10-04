@@ -1954,6 +1954,15 @@ pre, code {
   min-width: 24px !important;
   max-width: 100px;
 }
+.composer-thinking-glyph {
+  min-width: 1em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 1.15em;
+  line-height: 1;
+}
 .composer-usage-limit-badge {
   flex: 0 1 auto;
   min-width: 0;
@@ -1981,7 +1990,7 @@ pre, code {
 }
 @container (max-width: 400px) {
   .composer-model-control > button > svg:first-child,
-  .composer-thinking-control > button > svg:first-child,
+  .composer-thinking-control > button > svg,
   .composer-fast-control > span,
   .composer-slow-control > span {
     display: none;
@@ -2003,14 +2012,11 @@ pre, code {
     justify-content: center;
     gap: 0 !important;
   }
-  .composer-model-control > button > svg:first-child,
-  .composer-thinking-control > button > svg:first-child {
+  .composer-model-control > button > svg:first-child {
     display: block;
   }
   .composer-model-control > button > span,
-  .composer-model-control > button > svg:last-child,
-  .composer-thinking-control > button > span,
-  .composer-thinking-control > button > svg:last-child {
+  .composer-model-control > button > svg:last-child {
     display: none;
   }
   .composer-toolbar > button:not(.composer-primary-action),
