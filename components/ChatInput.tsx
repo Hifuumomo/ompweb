@@ -303,15 +303,6 @@ function menuDropStyle(placement: MenuPlacement, maxHeight: number | null): Reac
   };
 }
 
-
-/** A queued message is text-only: omp refuses attachments in a steer or a
- *  follow-up, whether or not a run is active. One predicate decides both
- *  whether `sendQueued` may queue and what a refused dictation tells the user,
- *  so the rule and its explanation cannot drift apart. */
-export function queueAllowsAttachments(attachedImages: number, attachedTextFiles: number): boolean {
-  return attachedImages === 0 && attachedTextFiles === 0;
-}
-
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, usageLimit, fastModeSupported, onFastModeChange, slowModeSupported, slowModeEnabled, slowModeScope, onSlowModeChange,
   onAbortCompaction, isCompacting, compactResult,
@@ -636,15 +627,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, []);
 
   const processFiles = useCallback((files: File[]) => {
-    if (isStreaming) {
-      setAttachError(t("chatInput.attachmentsDisabled"));
-      return;
-    }
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
     const otherFiles = files.filter((file) => !file.type.startsWith("image/"));
     void processImageFiles(imageFiles);
     void processTextFiles(otherFiles);
-  }, [isStreaming, processImageFiles, processTextFiles]);
+  }, [processImageFiles, processTextFiles]);
 
   const processFilesRef = useRef(processFiles);
   processFilesRef.current = processFiles;
@@ -902,13 +889,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       const finalText = base + sep + text;
       insertTextAtCursor(text);
       if (after && onFollowUp) {
-        // Queued messages are text-only: with attachments in the composer the
-        // queue would refuse it, so keep it here and say why.
-        if (!queueAllowsAttachments(attachedImagesRef.current.length, attachedTextFilesRef.current.length)) {
-          toast.info(t("chatInput.dictationKeptWithAttachments"));
-        } else {
-          sendQueued(after === "send" ? "followup" : after, finalText);
-        }
+        sendQueued(after === "send" ? "followup" : after, finalText);
       } else if (after && !isStreaming) {
         void handleSend(finalText);
       } else {
@@ -1262,7 +1243,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const msg = raw.trim();
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (sendSideQuestion(msg, overrideText)) return;
-    if (!queueAllowsAttachments(attachedImagesRef.current.length, attachedTextFilesRef.current.length)) return;
+    const images = attachedImagesRef.current.length ? attachedImagesRef.current : undefined;
+    const files = attachedTextFilesRef.current;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
@@ -1279,8 +1261,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       // own ACP handlers can run them.
       const expansion = expandWebSlashCommand(msg);
       if (expansion.kind === "expand") {
-        if (rejectsOversizedPrompt(expansion.prompt, attachedImagesRef.current)) return;
-        onPromptWithStreamingBehavior(expansion.prompt, streamingBehavior, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+        const prompt = composeMessageWithTextAttachments(expansion.prompt, files);
+        if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
+        onPromptWithStreamingBehavior(prompt, streamingBehavior, images);
         clearInput();
         return;
       }
@@ -1291,29 +1274,29 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }));
         return;
       }
-      if (rejectsOversizedPrompt(msg, attachedImagesRef.current)) return;
-      onPromptWithStreamingBehavior(msg, streamingBehavior, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+      const prompt = composeMessageWithTextAttachments(msg, files);
+      if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
+      onPromptWithStreamingBehavior(prompt, streamingBehavior, images);
       clearInput();
       return;
     }
-    if (rejectsOversizedPrompt(msg, attachedImagesRef.current)) return;
+    const composedMessage = composeMessageWithTextAttachments(msg, files);
+    if (rejectsOversizedPrompt(composedMessage, attachedImagesRef.current)) return;
     if (mode === "steer" && onSteer) {
-      onSteer(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+      onSteer(composedMessage, images);
     } else if (mode === "followup" && onFollowUp) {
-      onFollowUp(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+      onFollowUp(composedMessage, images);
     }
     clearInput();
   }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt, sendSideQuestion]);
-  // A typed, text-only message during a run is a queued follow-up — and so is
-  // a dictation in progress: the primary button must take the same state it
+  // A typed message or attachment during a run is a queued follow-up — and so
+  // is a dictation in progress: the primary button must take the same state it
   // would have if the composer already held text. Keep Stop as the action
   // while the composer is empty and nothing is being recorded.
   const dictationCapturing = isRecording || isPaused || isReviewing;
   const primaryActionQueuesMessage =
     isStreaming
-    && (Boolean(value.trim()) || dictationCapturing)
-    && attachedImages.length === 0
-    && attachedTextFiles.length === 0
+    && (Boolean(value.trim()) || attachedImages.length > 0 || attachedTextFiles.length > 0 || dictationCapturing)
     && Boolean(onFollowUp);
 
   // ── Queued follow-up bar ────────────────────────────────────────────────
@@ -1351,7 +1334,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setQueuedDeleteTarget(null);
       if (!removed || action !== "edit") return;
       // Recover through the store even if a new composer now owns this key.
-      recoverDraftText(key, entry.text);
+      // omp labels an image-only message "[Image]"; its images are not
+      // returned, so the label is not text to put back.
+      if (entry.text !== "[Image]") recoverDraftText(key, entry.text);
     } catch (error) {
       setQueuedDeleteTarget(null);
       toast.error(error instanceof Error ? error.message : String(error));
@@ -1780,9 +1765,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const attachmentMenuItemStyle: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 8, width: "100%",
     padding: "7px 10px", border: 0, borderRadius: 5,
-    background: "transparent", color: isStreaming ? "var(--text-dim)" : "var(--text-muted)",
-    cursor: isStreaming ? "not-allowed" : "pointer", fontSize: 12, textAlign: "left",
-    opacity: isStreaming ? 0.5 : 1,
+    background: "transparent", color: "var(--text-muted)",
+    cursor: "pointer", fontSize: 12, textAlign: "left",
   };
 
   return (
@@ -1825,7 +1809,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         // only hide files the app can attach (code, config, logs, ...).
         accept="*/*"
         multiple
-        disabled={isStreaming}
         style={{ display: "none" }}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
@@ -2744,7 +2727,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     role="menuitem"
                     type="button"
                     onClick={() => { setPlusMenuOpen(false); fileInputRef.current?.click(); }}
-                    disabled={isStreaming}
                     title={t("chatInput.attachFile")}
                     style={attachmentMenuItemStyle}
                   >
@@ -2756,7 +2738,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                       role="menuitem"
                       type="button"
                       onClick={() => void pasteClipboardImage()}
-                      disabled={isStreaming}
                       title={t("chatInput.pasteImage")}
                       style={attachmentMenuItemStyle}
                     >

@@ -303,9 +303,9 @@ during the wait.
   running `btw_record` comes first.
 - `/btw <question>` and `/btw` are client builtins (`handleBuiltinSlashCommand`
   case `"btw"`). `ChatInput.sendSideQuestion` routes them there from both the
-  idle and the streaming submit path, *before* the attachment gate: never sent
-  as a prompt, never queued, and refused with a toast (draft and attachments
-  kept) while attachments are attached. Asking starts the wrapper
+  idle and the streaming submit path, *before* attachments are folded in:
+  never sent as a prompt, never queued, and refused with a toast (draft and
+  attachments kept) while attachments are attached. Asking starts the wrapper
   (`get_state`) and attaches SSE first when it is not open, so no early delta
   is lost; a second ask while one is starting is ignored.
 - The `btw` response, history snapshots and frames race (HTTP vs SSE): merge
