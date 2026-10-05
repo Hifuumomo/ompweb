@@ -1570,17 +1570,27 @@ export function AppShell() {
         return width + child.getBoundingClientRect().width
           + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
       }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
-      const required = controlsWidth
+      const leftNeed = controlsWidth
         + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
         + parseFloat(getComputedStyle(tools).columnGap)
-        + parseFloat(headerStyle.paddingLeft) + parseFloat(headerStyle.paddingRight)
-        + parseFloat(headerStyle.columnGap)
+        + parseFloat(headerStyle.paddingLeft);
+      const rightNeed = parseFloat(headerStyle.paddingRight)
         + parseFloat(rightStyle.minWidth)
         + parseFloat(rightStyle.paddingLeft) + parseFloat(rightStyle.paddingRight);
+      const required = leftNeed + parseFloat(headerStyle.columnGap) + rightNeed;
       if (closed) details.open = false;
       content.style.display = display;
       content.style.visibility = visibility;
-      const compact = required > header.clientWidth;
+      // Title pill: same inset on both sides = widest real cluster (+8px gap), so it
+      // is truly centered and never under a control. Expand the tools only if the
+      // pill still keeps >= 200px (the container-query hide threshold) with them.
+      header.style.setProperty(
+        "--topbar-side",
+        `${Math.ceil(Math.max(tools.offsetLeft + tools.offsetWidth, header.clientWidth - right.offsetLeft)) + 8}px`,
+      );
+      const titleFits = header.querySelector(".shell-topbar-center") === null
+        || 2 * Math.max(leftNeed, rightNeed) + 216 <= header.clientWidth;
+      const compact = required > header.clientWidth || !titleFits;
       if (compact && details.dataset.compact !== "true" && hadControlsFocus) {
         restoreToolsFocusRef.current = true;
       }
@@ -1588,6 +1598,7 @@ export function AppShell() {
     };
     const observer = new ResizeObserver(update);
     observer.observe(header);
+    observer.observe(tools);
     observer.observe(content);
     for (const child of content.children) observer.observe(child);
     document.fonts.addEventListener("loadingdone", update);
@@ -1648,6 +1659,7 @@ export function AppShell() {
       onOpenSettings={() => setSettingsTab((prev) => prev ? null : "general")}
       onOpenArchive={() => setArchiveBrowserOpen(true)}
       updateAvailable={Boolean(appUpdate?.updateAvailable) || ompUpdateAvailable}
+      onClose={isMobile ? handleSidebarToggle : undefined}
     />
   );
 
@@ -1755,10 +1767,6 @@ export function AppShell() {
         }
       }
       @media (max-width: 640px) {
-        .sidebar-overlay-backdrop.sidebar-mobile-pending {
-          opacity: 0 !important;
-          pointer-events: none !important;
-        }
         .sidebar-container.sidebar-mobile-pending.sidebar-open {
           transform: translateX(-100%);
           box-shadow: none;
@@ -1771,21 +1779,6 @@ export function AppShell() {
       {/* Left sidebar: hidden on full-page Settings */}
       {!settingsTab && (
         <>
-      {/* Mobile overlay backdrop */}
-      <div
-        className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
-        onClick={() => setSidebarOpen(false)}
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 199,
-          background: "color-mix(in srgb, var(--text) 28%, transparent)",
-          opacity: sidebarOpen ? 1 : 0,
-          pointerEvents: sidebarOpen ? "auto" : "none",
-          transition: "opacity var(--dur-slow) var(--ease-out-warm)",
-        }}
-      />
-
       <nav
         id="workspace-sidebar"
         role={isMobile ? "dialog" : undefined}
@@ -1798,7 +1791,7 @@ export function AppShell() {
         inert={mobileSidebarReady && (!sidebarOpen || rightPanelIsModal) ? true : undefined}
         style={{
           background: "var(--bg-panel)",
-          borderRight: "1px solid var(--border)",
+          borderRight: isMobile ? "none" : "1px solid var(--border)",
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
@@ -1876,7 +1869,7 @@ export function AppShell() {
           alignItems: "center",
           flexShrink: 0,
           borderBottom: "1px solid var(--border)",
-          minHeight: isMobile ? "calc(44px + env(safe-area-inset-top))" : 36,
+          minHeight: "var(--shell-topbar-height)",
           background: "var(--bg-panel)",
           padding: isMobile ? "env(safe-area-inset-top) 4px 0" : "0 8px",
           gap: "0 8px",
@@ -2067,7 +2060,8 @@ export function AppShell() {
                     color: "var(--text-muted)",
                     whiteSpace: "nowrap",
                     minWidth: 0,
-                    maxWidth: "min(400px, 30vw)",
+                    width: "100%",
+                    justifyContent: "center",
                     flexShrink: 1,
                   }}
                 >
@@ -2431,9 +2425,10 @@ export function AppShell() {
         title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
         aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
         style={{
-          position: "fixed", top: "env(safe-area-inset-top, 0px)", right: "env(safe-area-inset-right, 0px)", zIndex: 300,
-          width: isMobile ? 44 : 36, height: isMobile ? 44 : 36, padding: 0,
-          borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
+          position: "fixed", top: 0, right: "env(safe-area-inset-right, 0px)", zIndex: 300,
+          width: isMobile ? 44 : 36,
+          // The full-screen mobile drawer is a modal above this fixed control.
+          ...(isMobile && mobileSidebarReady && sidebarOpen ? { display: "none" } : {}),
         }}
       >
         {rightPanelOpen ? <X size={16} strokeWidth={1.8} aria-hidden="true" /> : <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />}
