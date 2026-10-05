@@ -583,6 +583,25 @@ during the wait.
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.
 - Browser autoplay policy means sound must be unlocked from a user gesture; `ChatInput` calls the unlock hook from interactive controls, and `ChatWindow` plays the tone from `onAgentEnd`.
 
+## Git history and PR landing rules
+
+- **Never rewrite `main`'s history** — no force-push, `filter-branch`, rebase
+  of already-pushed commits, or `reset --hard` followed by a force-push — unless
+  the user explicitly asks for exactly that, after being told what it affects
+  (every rewritten commit gets a new hash, forks and clones diverge). A cosmetic
+  flaw such as a badly worded commit title is not worth it; leave it.
+- Never push or rewrite someone else's branch. Contributors' commits keep their
+  original hashes and authorship.
+- Land PRs with a squash or rebase merge so each change is one commit with a
+  normal title (`fix(scope): ...`, matching the surrounding log). Do not create
+  throwaway integration branches (`scratch`, `pr-NNN`) and merge PR branches
+  into them: git's auto-titles (`Merge branch 'pr-200' into scratch`) end up in
+  the permanent history. If PRs conflict with each other (usually
+  `CHANGELOG.md`), ask the authors to rebase, or resolve on a properly named
+  branch and write real commit messages.
+- Before merging a PR: CI green on the current head, mergeable, and diff read.
+  Pass the head SHA to the merge so a late push is not merged unseen.
+
 ## omp Session File Format (v3)
 
 Location: `~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
