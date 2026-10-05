@@ -112,6 +112,7 @@ lib/
   tool-presets.ts      PRESET_NONE/DEFAULT/FULL + getToolNamesForPreset()
   types.ts             shared TypeScript types
   normalize.ts         normalizeToolCalls() — field name mismatch between file format and our types
+  navigation-history.ts  pure back/forward view-history stack + shortcut matcher (⌘[/⌘], Alt+←/→)
   word-prediction.ts   pure ghost-text arithmetic (advance/accept) for composer word prediction
   worktree.ts          project/worktree resolution and git worktree operations
 
@@ -147,6 +148,7 @@ hooks/
   useIsMobile.ts           responsive breakpoint hook
   usePrefersReducedMotion.ts OS reduce-motion preference (SMIL-safe)
   useTheme.ts              theme state (localStorage key "omp-theme")
+  useNavigationHistory.ts  in-app back/forward stack (record/peek/commit/drop) for visited chat views
   useWordPrediction.ts     debounced omp predict_word ghost text + feedback
   useBtw.ts                /btw records/active panel/history dialog fed by btw_* SSE frames
 ```
@@ -496,6 +498,37 @@ during the wait.
 - Auth flows go through RPC commands (`get_login_providers`, `login`) against the omp child process; credentials live in omp's `agent.db` (SQLite) which omp-web never touches directly.
 - The Models panel reads and writes `models.yml` in the omp agent directory (`~/.omp/agent/models.yml`, `.yaml` fallback).
 - API-key status endpoints must never return the raw key.
+
+### Navigate back / forward (`lib/navigation-history.ts`, `hooks/useNavigationHistory.ts`)
+- Browser-style back/forward over visited chat views (sessions + the new-chat
+  composer), in-memory per page load. It is **omp-web's own stack**, never the
+  browser History API — the app only ever `router.replace`s `?session=`, and
+  the real history stack belongs to the mobile back-gesture / exit-guard
+  machinery (`useSidebarHistory` + the popstate bridge).
+- AppShell records views from one effect keyed on
+  `(selectedSession?.id, newSessionCwd)`: recording the entry the cursor
+  already sits on is a no-op, which is what makes back/forward
+  self-suppressing — `navigateInHistory` commits the step, the view lands, the
+  effect re-records the target, nothing is pushed. Any other view change
+  (sidebar/palette select, new chat, session created, fork, project-switch
+  close) pushes normally and truncates the forward branch, browser-style.
+- Applying a step: peek → resolve the session id via `/api/sessions` →
+  commit + `handleSelectSession`, or `handleNewSession` for new-chat entries.
+  A dead id (deleted session) drops that entry and tries the next one in the
+  same direction; a failed list fetch aborts without dropping. A view change
+  during the await (versioned ref) aborts the navigation so a slow fetch
+  never yanks the chat away.
+- Shortcuts live in `useGlobalKeyboardShortcuts`: ⌘[/⌘] (macOS standard),
+  Alt+←/Alt+→ (Windows/Linux standard; on macOS Alt+Arrow stays free — it is
+  word-wise caret movement), plus the mouse back/forward buttons
+  (`BrowserBack`/`BrowserForward`). The keystroke is always swallowed while a
+  handler is registered — an exhausted stack stops dead rather than falling
+  through to the browser's own back/forward, so the app is never backed out
+  of by accident — and shortcuts are skipped entirely while a
+  `[role="dialog"]` modal is open. The sidebar header buttons (before Archived
+  Sessions, wrapped in `.sidebar-nav-buttons`) disable on stack bounds, show
+  the platform shortcut in their tooltip, and hide below a 240px sidebar via
+  the `.sidebar-shell` container query (the keyboard shortcuts still work).
 
 ### Composer word prediction (`hooks/useWordPrediction.ts`, `components/GhostMirror.tsx`)
 - Ghost text comes from omp's `predict_word` RPC (engine = omp's
