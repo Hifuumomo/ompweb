@@ -3332,22 +3332,24 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 .shell-toolbar-btn:active:not(:disabled) {
   transform: scale(0.96);
 }
-.shell-panel-toggle {
-  border-radius: 0 !important;
-  background: var(--bg-panel);
-  color: var(--text-muted);
+.right-panel-toolbar {
+  --right-panel-close-width: 36px;
+  position: relative;
+  padding-right: var(--right-panel-close-width);
 }
-.shell-panel-toggle:hover:not(:disabled),
-.shell-panel-toggle[aria-pressed="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-/* Same height as the top bar (token below), no border; the icon centers in the
-   content area under the safe inset. Beats the touch-target size overrides. */
-html:root .shell-toolbar-btn.shell-panel-toggle {
+html:root .shell-toolbar-btn.right-panel-close-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--right-panel-close-width) !important;
   height: var(--shell-topbar-height) !important;
+  min-width: 0 !important;
   min-height: 0 !important;
-  padding: 0 0 1px !important;
+  padding: 0 !important;
+  border-radius: 0;
+}
+html[data-touch-targets="accessible"] .right-panel-toolbar {
+  --right-panel-close-width: 44px;
 }
 /* Subtle group separator between toolbar control clusters */
 .shell-toolbar-divider {
@@ -3366,7 +3368,10 @@ html:root .shell-toolbar-btn.shell-panel-toggle {
     width: 40px;
     height: 40px;
   }
-  html:root .shell-toolbar-btn.shell-panel-toggle {
+  .right-panel-toolbar {
+    --right-panel-close-width: 44px;
+  }
+  html:root .shell-toolbar-btn.right-panel-close-button {
     padding-top: env(safe-area-inset-top, 0px) !important;
   }
   .shell-toolbar-divider {
@@ -3456,10 +3461,6 @@ html:root .shell-toolbar-btn.shell-panel-toggle {
 @media (max-width: 640px) {
   .shell-topbar {
     gap: 0 4px !important;
-    padding-right: 48px !important;
-  }
-  .shell-topbar:has(.shell-session-info) {
-    padding-right: calc(92px + env(safe-area-inset-right, 0px)) !important;
   }
   .shell-topbar-overflow-content {
     overflow-x: auto;
@@ -3478,10 +3479,8 @@ html:root .shell-toolbar-btn.shell-panel-toggle {
   .shell-topbar .shell-toolbar-divider {
     margin: 0;
   }
-  .shell-topbar [data-topbar-right-group] {
-    width: 0 !important;
-    min-width: 0 !important;
-    padding: 0 !important;
+  .shell-topbar-metrics {
+    display: none;
   }
   .shell-topbar-project-context {
     display: none !important;

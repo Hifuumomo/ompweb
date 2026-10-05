@@ -17,7 +17,7 @@ import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
-import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, X, Zap } from "lucide-react";
+import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
@@ -970,6 +970,12 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const closeRightPanel = useCallback(() => {
+    setRightPanelOpen(false);
+    if (!isCompactOverlay) {
+      topBarRef.current?.querySelector<HTMLButtonElement>(".shell-panel-opener")?.focus();
+    }
+  }, [isCompactOverlay]);
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
   const [rightView, setRightView] = useState<"explorer" | "git" | "file">("explorer");
   // User-chosen pixel width (null = fluid 42% default), persisted.
@@ -983,7 +989,7 @@ export function AppShell() {
   const [rightPanelMounted, setRightPanelMounted] = useState(false);
   const rightPanelIsModal = isCompactOverlay && rightPanelMounted && rightPanelOpen && !settingsTab;
   const rightPanelRef = useModalDialog<HTMLDivElement>({
-    onClose: () => setRightPanelOpen(false),
+    onClose: closeRightPanel,
     active: rightPanelIsModal,
   });
   const attachRightPanel = useCallback((element: HTMLDivElement | null) => {
@@ -1564,7 +1570,6 @@ export function AppShell() {
         !["absolute", "fixed"].includes(getComputedStyle(child).position));
       const contentStyle = getComputedStyle(content);
       const headerStyle = getComputedStyle(header);
-      const rightStyle = getComputedStyle(right);
       const controlsWidth = children.reduce((width, child) => {
         const style = getComputedStyle(child);
         return width + child.getBoundingClientRect().width
@@ -1574,9 +1579,7 @@ export function AppShell() {
         + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
         + parseFloat(getComputedStyle(tools).columnGap)
         + parseFloat(headerStyle.paddingLeft);
-      const rightNeed = parseFloat(headerStyle.paddingRight)
-        + parseFloat(rightStyle.minWidth)
-        + parseFloat(rightStyle.paddingLeft) + parseFloat(rightStyle.paddingRight);
+      const rightNeed = parseFloat(headerStyle.paddingRight) + right.offsetWidth;
       const required = leftNeed + parseFloat(headerStyle.columnGap) + rightNeed;
       if (closed) details.open = false;
       content.style.display = display;
@@ -1598,6 +1601,7 @@ export function AppShell() {
     };
     const observer = new ResizeObserver(update);
     observer.observe(header);
+    observer.observe(right);
     observer.observe(tools);
     observer.observe(content);
     for (const child of content.children) observer.observe(child);
@@ -1607,7 +1611,7 @@ export function AppShell() {
       observer.disconnect();
       document.fonts.removeEventListener("loadingdone", update);
     };
-  }, [hasGenerationSpeed, isMobile, locale, rightPanelOpen, settingsTab, showChat]);
+  }, [isMobile, locale, settingsTab, showChat]);
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
 
@@ -1870,7 +1874,7 @@ export function AppShell() {
           borderBottom: "1px solid var(--border)",
           minHeight: "var(--shell-topbar-height)",
           background: "var(--bg-panel)",
-          padding: isMobile ? "env(safe-area-inset-top) 4px 0" : "0 8px",
+          padding: isMobile ? "env(safe-area-inset-top, 0px) max(4px, env(safe-area-inset-right, 0px)) 0 max(4px, env(safe-area-inset-left, 0px))" : "0 8px",
           gap: "0 8px",
           minWidth: 0,
         }}>
@@ -2140,26 +2144,30 @@ export function AppShell() {
             );
           })()}
 
-          {/* Right Zone: Segmented metric pills (Provider limits, Session Stats/Usage, Speed) */}
+          {/* Right zone: speed, mobile session information, and the file-panel opener. */}
           <div
             data-topbar-right-group
             style={{
               marginLeft: "auto",
               display: "flex",
               alignItems: "center",
-              justifyContent: "flex-end",
-              gap: 6,
-              paddingRight: rightPanelOpen ? 8 : 44,
-              minWidth: hasGenerationSpeed ? "calc(10ch + 33px)" : 0,
-              width: hasGenerationSpeed ? 200 : 0,
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              containerType: "inline-size",
-              containerName: "topbar-speed",
+              gap: isMobile ? 2 : 6,
+              height: isMobile ? 43 : "calc(var(--shell-topbar-height) - 1px)",
               flexShrink: 1,
+              minWidth: 0,
             }}
           >
-
+            {hasGenerationSpeed && <div
+              className="shell-topbar-metrics"
+              style={{
+                flex: "0 1 calc(10ch + 33px)",
+                minWidth: 0,
+                fontSize: 11,
+                fontFamily: "var(--font-mono)",
+                containerType: "inline-size",
+                containerName: "topbar-speed",
+              }}
+            >
             {/* Generation speed pill */}
             {showChat && (() => {
               if (!speed || rate == null) return null;
@@ -2205,21 +2213,27 @@ export function AppShell() {
                 </div>
               );
             })()}
+            </div>}
+            {isMobile && showChat && (
+              <div
+                ref={setSessionInfoContainer}
+                className="shell-session-info"
+                style={{ display: "flex", height: 44, flexShrink: 0, alignSelf: "flex-start" }}
+              />
+            )}
+            <button
+              type="button"
+              className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
+              onClick={() => setRightPanelOpen((open) => !open)}
+              aria-expanded={rightPanelOpen}
+              aria-controls="workspace-file-panel"
+              aria-pressed={rightPanelOpen}
+              title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+              aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+            >
+              <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />
+            </button>
           </div>
-          {isMobile && showChat && (
-            <div
-              ref={setSessionInfoContainer}
-              className="shell-session-info"
-              style={{
-                position: "absolute",
-                right: rightPanelOpen ? 4 : "calc(44px + env(safe-area-inset-right, 0px))",
-                top: isMobile ? "env(safe-area-inset-top)" : 4,
-                height: isMobile ? 44 : 28,
-                display: "flex",
-                alignItems: "center",
-              }}
-            />
-          )}
 
         </div>
 
@@ -2362,7 +2376,7 @@ export function AppShell() {
         <div
           className="right-panel-backdrop"
           aria-hidden="true"
-          onClick={() => setRightPanelOpen(false)}
+          onClick={closeRightPanel}
         />
       )}
       {!settingsTab && rightPanelHasOpened && (
@@ -2372,6 +2386,7 @@ export function AppShell() {
         rightView={rightView}
         onSelectView={handleSelectRightView}
         rightPanelOpen={rightPanelOpen}
+        onClose={closeRightPanel}
         rightPanelWidth={rightPanelWidth}
         rightPanelResizing={rightPanelResizing}
         rightPanelRef={attachRightPanel}
@@ -2413,26 +2428,6 @@ export function AppShell() {
       )}
 
     </div>
-    {!settingsTab && (
-      <button
-        type="button"
-        className="shell-toolbar-btn shell-panel-toggle ui-focus-ring"
-        onClick={() => setRightPanelOpen((v) => !v)}
-        aria-expanded={rightPanelOpen}
-        aria-controls="workspace-file-panel"
-        aria-pressed={rightPanelOpen}
-        title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-        aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-        style={{
-          position: "fixed", top: 0, right: "env(safe-area-inset-right, 0px)", zIndex: 300,
-          width: isMobile ? 44 : 36,
-          // The full-screen mobile drawer is a modal above this fixed control.
-          ...(isMobile && mobileSidebarReady && sidebarOpen ? { display: "none" } : {}),
-        }}
-      >
-        {rightPanelOpen ? <X size={16} strokeWidth={1.8} aria-hidden="true" /> : <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />}
-      </button>
-    )}
     <AppUpdateDialog open={appUpdateDialogOpen} update={appUpdate} phase={appUpdatePhase} visibleStage={appUpdateVisibleStage} error={appUpdateError} onProceed={() => void proceedWithAppUpdate()} onNotNow={dismissAppUpdate} />
     {archiveBrowserOpen && (
       <ArchiveBrowser
