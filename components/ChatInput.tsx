@@ -1772,6 +1772,24 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       }
     }
   }, [contextOpen, contextContainer]);
+  useEffect(() => {
+    if (!contextOpen) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+      const panel = contextWrapRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+      if (!panel?.getClientRects().length) return;
+      const popup = event.target instanceof Element
+        ? event.target.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
+        : null;
+      if (popup && !contextWrapRef.current?.contains(popup)) return;
+      // Capture Escape before the composer or global shortcut can stop a run.
+      event.preventDefault();
+      event.stopPropagation();
+      setContextOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [contextOpen]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -3170,11 +3188,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <div
                 ref={contextWrapRef}
                 style={{ position: "relative", flexShrink: 0 }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Escape" || !contextOpen) return;
-                  event.stopPropagation();
-                  setContextOpen(false);
-                }}
               >
                 <button
                   type="button"
