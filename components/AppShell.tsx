@@ -648,6 +648,7 @@ export function AppShell() {
   }, [resetAppUpdateVisibleStage]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const [sessionInfoContainer, setSessionInfoContainer] = useState<HTMLDivElement | null>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -762,8 +763,7 @@ export function AppShell() {
     });
   }, [activeTopPanel, systemPrompt, systemPromptLoading, toggleTopPanel]);
 
-  // The topbar session panel is gone (its content lives in the composer ring
-  // popover), so /session opens that instead.
+  // /session opens the same information panel as the top-bar control.
   const openSessionStatsPanel = useCallback(() => {
     chatInputRef.current?.openContextPanel();
   }, []);
@@ -2156,7 +2156,7 @@ export function AppShell() {
               alignItems: "center",
               justifyContent: "flex-end",
               gap: 6,
-              paddingRight: rightPanelOpen ? 8 : 44,
+              paddingRight: (rightPanelOpen ? 8 : 44) + (showChat ? 36 : 0),
               minWidth: hasGenerationSpeed ? "calc(10ch + 33px)" : 0,
               width: hasGenerationSpeed ? 200 : 0,
               fontSize: 11,
@@ -2213,6 +2213,20 @@ export function AppShell() {
               );
             })()}
           </div>
+          {showChat && (
+            <div
+              ref={setSessionInfoContainer}
+              className="shell-session-info"
+              style={{
+                position: "absolute",
+                right: rightPanelOpen ? 4 : 44,
+                top: isMobile ? "env(safe-area-inset-top)" : 4,
+                height: isMobile ? 44 : 28,
+                display: "flex",
+                alignItems: "center",
+              }}
+            />
+          )}
 
         </div>
 
@@ -2282,6 +2296,7 @@ export function AppShell() {
               onSystemPromptLoaderChange={handleSystemPromptLoaderChange}
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
+              sessionInfoContainer={sessionInfoContainer}
               onGenerationSpeedChange={handleGenerationSpeedChange}
               onOpenProviders={() => setSettingsTab("providers")}
               toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}

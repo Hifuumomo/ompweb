@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, memo, KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ClipboardPaste, ListChecks, Loader2, Mic, Paperclip, Plus, Shrink, Snail, Sparkles, Wrench, X, Zap } from "lucide-react";
 import { getSubmitDuringRunBehavior, isWordCompletionEnabled } from "@/lib/composer-prefs";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
@@ -183,12 +184,14 @@ interface Props {
   advisorActive?: boolean;
   /** Resolved advisor role (display model + reasoning) for the composer tooltips. */
   advisorModel?: { name: string; reasoning: string | null } | null;
-  /** Compact the session context from the composer toolbar. */
+  /** Compact the session context from the session information panel. */
   onCompact?: () => void;
-  /** Live context totals feeding the composer context ring. */
+  /** Live context totals feeding the session information ring. */
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   /** Session stats shown in the context ring popover. */
   sessionStats?: SessionStatsInfo | null;
+  /** Top-bar mount point for the session information control. */
+  sessionInfoContainer?: HTMLDivElement | null;
   /** Model capacity shown in the context ring popover. */
   modelCapacity?: { contextWindow?: number; maxTokens?: number } | null;
   /** Generation speed shown in the context ring popover. */
@@ -327,6 +330,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   onCompact,
   contextUsage,
   sessionStats,
+  sessionInfoContainer,
   modelCapacity,
   generationSpeed,
   onRemoveQueuedMessage,
@@ -1694,7 +1698,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         saved: formatTokenCount(compactSavedTokens, locale),
       })
     : null;
-  // Composer context ring: live totals, falling back to the session snapshot.
+  // Session information ring: live totals, falling back to the session snapshot.
   const ringCtx = contextUsage ?? sessionStats?.contextUsage ?? null;
   const ringPct = ringCtx?.percent ?? null;
   const ringTone = ringPct !== null && ringPct > 90
@@ -3140,9 +3144,18 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </span>
             )}
 
-            {/* Context ring: usage gauge opening the session context popover */}
-            {onCompact && (
-              <div ref={contextWrapRef} style={{ position: "relative", flexShrink: 0 }}>
+            {/* Keep live session information with the composer state, but render it in the top bar. */}
+            {onCompact && sessionInfoContainer && createPortal(
+              <div
+                ref={contextWrapRef}
+                style={{ position: "relative", flexShrink: 0 }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape" || !contextOpen) return;
+                  event.stopPropagation();
+                  setContextOpen(false);
+                  contextWrapRef.current?.querySelector("button")?.focus();
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => setContextOpen((open) => !open)}
@@ -3150,9 +3163,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   aria-label={t("composerContext.title")}
                   aria-expanded={contextOpen}
                   aria-haspopup="dialog"
+                  className="shell-toolbar-btn ui-focus-ring"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 28, height: 28, padding: 0,
+                    width: isMobile ? 44 : 28, height: isMobile ? 44 : 28, padding: 0,
                     background: contextOpen ? "var(--bg-hover)" : "none", border: "none",
                     borderRadius: 7,
                     color: isCompacting ? "var(--accent)" : "var(--text-muted)",
@@ -3199,7 +3213,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     className="picker-panel"
                     style={{
                       position: isMobile ? "fixed" : "absolute",
-                      bottom: isMobile ? 8 : "calc(100% + 8px)",
+                      top: isMobile ? "calc(52px + env(safe-area-inset-top))" : "calc(100% + 8px)",
                       ...(isMobile
                         ? { left: 8, right: 8 }
                         : { right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
@@ -3209,7 +3223,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                       boxShadow: "var(--shadow-pop)",
                       zIndex: 60,
                       padding: 12,
-                      maxHeight: isMobile ? "calc(100dvh - 32px)" : "min(50vh, 380px)",
+                      maxHeight: isMobile ? "calc(100dvh - 68px - env(safe-area-inset-top))" : "min(50vh, 380px)",
                       overflowY: "auto",
                     }}
                   >
@@ -3258,7 +3272,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     </button>
                   </div>
                 )}
-              </div>
+              </div>,
+              sessionInfoContainer,
             )}
 
             {/* Dictation */}

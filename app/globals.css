@@ -3453,6 +3453,9 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     gap: 0 4px !important;
     padding-right: 48px !important;
   }
+  .shell-topbar:has(.shell-session-info) {
+    padding-right: 92px !important;
+  }
   .shell-topbar-overflow-content {
     overflow-x: auto;
     justify-content: flex-start;
