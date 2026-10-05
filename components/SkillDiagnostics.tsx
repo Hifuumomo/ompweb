@@ -101,7 +101,7 @@ export function SkillDiagnosticsNotice({ snapshot, onDisable }: {
   const Icon = conflicts > 0 ? CircleAlert : Info;
   return (
     <>
-      {visible && <div role="status" aria-live="polite" className="relative flex flex-wrap items-center gap-2 border border-border bg-bg-subtle py-2 pl-3 pr-9 text-xs" style={{ marginBottom: 8, borderRadius: "var(--radius-card)", color: conflicts > 0 ? "var(--status-warning)" : "var(--text-muted)" }}>
+      {visible && <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-2 border border-border bg-bg-subtle px-3 py-2 text-xs" style={{ marginBottom: 8, borderRadius: "var(--radius-card)", color: conflicts > 0 ? "var(--status-warning)" : "var(--text-muted)" }}>
         <Icon size={14} aria-hidden />
         <span className="min-w-0 flex-1">{[conflicts > 0 ? tn("skillDiagnostics.conflicts", conflicts) : null, duplicates > 0 ? tn("skillDiagnostics.duplicates", duplicates) : null].filter(Boolean).join(" · ")}</span>
         <button type="button" className="ui-focus-ring" style={actionStyle} onClick={() => setOpen(true)}>{t("skillDiagnostics.details")}</button>
@@ -116,7 +116,7 @@ export function SkillDiagnosticsNotice({ snapshot, onDisable }: {
             setSaving(false);
           }
         }}>{saving ? t("skillDiagnostics.saving") : t("skillDiagnostics.disable")}</button>
-        <button type="button" className="ui-focus-ring absolute right-1 top-1" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, padding: 4, background: "none", border: "none", borderRadius: "var(--radius-control)", color: "var(--text-muted)", cursor: "pointer" }} aria-label={t("skillDiagnostics.dismiss")} title={t("skillDiagnostics.dismiss")} onClick={() => { setDismissedKey(reportKey); setError(null); }}><X size={14} aria-hidden /></button>
+        <button type="button" className="ui-focus-ring" style={{ display: "inline-flex", padding: 4, background: "none", border: "none", borderRadius: "var(--radius-control)", color: "var(--text-muted)", cursor: "pointer" }} aria-label={t("skillDiagnostics.dismiss")} title={t("skillDiagnostics.dismiss")} onClick={() => { setDismissedKey(reportKey); setError(null); }}><X size={14} aria-hidden /></button>
         {error && <span role="alert" style={{ color: "var(--status-error)", width: "100%" }}>{error}</span>}
       </div>}
       <SkillDiagnosticsDialog open={open} onOpenChange={setOpen} snapshot={snapshot} />
