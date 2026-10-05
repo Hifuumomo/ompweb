@@ -3373,6 +3373,7 @@ html[data-touch-targets="accessible"] .right-panel-toolbar {
   }
   html:root .shell-toolbar-btn.right-panel-close-button {
     padding-top: env(safe-area-inset-top, 0px) !important;
+    border-bottom: 1px solid var(--border);
   }
   .shell-toolbar-divider {
     margin: 0 4px;
