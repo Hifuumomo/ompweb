@@ -14,7 +14,7 @@ import type { SttAfter } from "@/lib/stt";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
 import { RecordingDeck } from "./RecordingDeck";
-import { clearDraft, getDraft, mergeRecoveredText, recoverDraftText, setDraft, subscribeDraftRecovery } from "@/lib/draft-store";
+import { clearDraft, getDraft, mergeRecoveredText, recoverDraft, setDraft, subscribeDraftRecovery, type ChatDraftImage } from "@/lib/draft-store";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import type { AttachedImage, AttachedTextFile } from "./ChatInput-draft-attachments";
 import {
@@ -140,9 +140,10 @@ interface Props {
   onPredictWord?: PredictWord;
   onPredictWordFeedback?: PredictWordFeedback;
   onAbort: () => void;
-  onSteer?: (message: string, images?: AttachedImage[]) => void;
-  onFollowUp?: (message: string, images?: AttachedImage[]) => void;
-  onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
+  /** Steer/follow-up callbacks resolve false when omp refused the message. */
+  onSteer?: (message: string, images?: AttachedImage[]) => Promise<boolean>;
+  onFollowUp?: (message: string, images?: AttachedImage[]) => Promise<boolean>;
+  onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => Promise<boolean>;
   isStreaming: boolean;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
@@ -193,8 +194,9 @@ interface Props {
   modelCapacity?: { contextWindow?: number; maxTokens?: number } | null;
   /** Generation speed shown in the context ring popover. */
   generationSpeed?: GenerationSpeedInfo | null;
-  /** Cancel one pending message in omp before removing it from the queue panel. */
-  onRemoveQueuedMessage?: (text: string, queue: keyof QueuedMessages) => Promise<boolean>;
+  /** Cancel one pending message in omp before removing it from the queue
+   *  panel; resolves to its images once omp confirms, else false. */
+  onRemoveQueuedMessage?: (text: string, queue: keyof QueuedMessages) => Promise<ChatDraftImage[] | false>;
   /** Promote the first matching native follow-up into steering. */
   onPromoteQueuedToSteer?: (text: string) => void | Promise<void>;
   slashCommands?: SlashCommandInfo[];
@@ -770,6 +772,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const { text } = recovery;
     // Merge with pending edits rather than replacing them with a store snapshot.
     setValue((current) => mergeRecoveredText(current, recovery));
+    const images = recovery.images ?? [];
+    if (images.length) {
+      setAttachedImages((prev) => [...prev, ...draftImagesToAttachedImages(images.slice(0, MAX_ATTACHED_IMAGES - prev.length))]);
+    }
     setAtQuery(null);
     setHistoryMenuOpen(false);
     requestAnimationFrame(() => {
@@ -1244,6 +1250,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (sendSideQuestion(msg, overrideText)) return;
     const images = attachedImagesRef.current.length ? attachedImagesRef.current : undefined;
+    // The queue callbacks resolve false when omp refused the message; they
+    // restore its text, and the images go back to this draft.
+    const key = draftKeyRef.current;
+    const keptImages = images?.map(imageToDraftImage);
+    const restoreImagesOnFailure = (queued: Promise<boolean> | undefined) => {
+      if (!keptImages || !key) return;
+      void Promise.resolve(queued).then((ok) => {
+        if (ok === false) recoverDraft(key, { text: "", images: keptImages });
+      });
+    };
     const files = attachedTextFilesRef.current;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
@@ -1263,7 +1279,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       if (expansion.kind === "expand") {
         const prompt = composeMessageWithTextAttachments(expansion.prompt, files);
         if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
-        onPromptWithStreamingBehavior(prompt, streamingBehavior, images);
+        restoreImagesOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images));
         clearInput();
         return;
       }
@@ -1276,16 +1292,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       }
       const prompt = composeMessageWithTextAttachments(msg, files);
       if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
-      onPromptWithStreamingBehavior(prompt, streamingBehavior, images);
+      restoreImagesOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images));
       clearInput();
       return;
     }
     const composedMessage = composeMessageWithTextAttachments(msg, files);
     if (rejectsOversizedPrompt(composedMessage, attachedImagesRef.current)) return;
     if (mode === "steer" && onSteer) {
-      onSteer(composedMessage, images);
+      restoreImagesOnFailure(onSteer(composedMessage, images));
     } else if (mode === "followup" && onFollowUp) {
-      onFollowUp(composedMessage, images);
+      restoreImagesOnFailure(onFollowUp(composedMessage, images));
     }
     clearInput();
   }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt, sendSideQuestion]);
@@ -1334,9 +1350,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setQueuedDeleteTarget(null);
       if (!removed || action !== "edit") return;
       // Recover through the store even if a new composer now owns this key.
-      // omp labels an image-only message "[Image]"; its images are not
-      // returned, so the label is not text to put back.
-      if (entry.text !== "[Image]") recoverDraftText(key, entry.text);
+      // omp labels an image-only message "[Image]": the label is not text.
+      recoverDraft(key, { text: entry.text === "[Image]" ? "" : entry.text, images: removed });
     } catch (error) {
       setQueuedDeleteTarget(null);
       toast.error(error instanceof Error ? error.message : String(error));

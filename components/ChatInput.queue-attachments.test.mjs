@@ -48,10 +48,11 @@ afterEach(() => {
 });
 
 /** A composer mid-run with an image and a text file attached through the picker path. */
-async function renderRunningWithAttachments() {
+async function renderRunningWithAttachments({ queued = true } = {}) {
   const calls = [];
-  // Images are the last argument of every queue callback.
-  const record = (name) => (message, ...rest) => { calls.push({ name, message, images: rest.at(-1) }); };
+  // Images are the last argument of every queue callback, which resolves
+  // false when omp refused the message.
+  const record = (name) => async (message, ...rest) => { calls.push({ name, message, images: rest.at(-1) }); return queued; };
   const ref = React.createRef();
   render(React.createElement(ChatInput, {
     ref,
@@ -113,4 +114,11 @@ test("a queued web slash command is expanded and keeps the attachments", async (
   delete window.HTMLElement.prototype.scrollIntoView;
   assert.equal(calls[0].name, "onPromptWithStreamingBehavior");
   assertQueuedWithAttachments(calls[0], expandWebSlashCommand("/goal ship it").prompt);
+});
+
+test("a refused follow-up gives its images back to the composer", async () => {
+  const calls = await renderRunningWithAttachments({ queued: false });
+  fireEvent.click(screen.getByRole("button", { name: /queue/i }));
+  await waitFor(() => assert.equal(calls.length, 1));
+  await waitFor(() => assert.deepEqual(getDraft(KEY)?.images, [{ data: PNG, mimeType: "image/png" }]));
 });
