@@ -34,7 +34,7 @@ export function ProviderAccounts({ providerId, enabled }: { providerId: string; 
               key={account.key}
               style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12, color: "var(--text)", padding: "4px 8px", background: "var(--bg-subtle)", borderRadius: "var(--radius-control)" }}
             >
-              <span>{account.label ?? t("modelsConfig.accountNumber", { index: account.index ?? 1 })}</span>
+              <span title={account.label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{account.label ?? t("modelsConfig.accountNumber", { index: account.index ?? 1 })}</span>
               {account.plan && <span style={{ color: "var(--text-dim)" }}>{account.plan}</span>}
             </li>
           ))}

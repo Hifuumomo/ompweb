@@ -59,10 +59,6 @@ function usageWindow(
   };
 }
 
-function accountLabel(metadata: Record<string, unknown> | undefined): string | undefined {
-  return nonEmptyString(metadata?.email) ?? nonEmptyString(metadata?.accountId);
-}
-
 type UsageLimit = { id: ProviderUsageWindowId; fraction: number; window: Record<string, unknown> };
 
 type UsageGroup = {
@@ -116,7 +112,9 @@ function normalizeReport(
     selectedGroups.splice(0, selectedGroups.length, selected);
   }
   const metadata = isRecord(rawReport.metadata) ? rawReport.metadata : undefined;
-  const label = accountLabel(metadata);
+  // Email only: unredacted account ids are opaque UUIDs, so those accounts
+  // show as "Account N".
+  const label = nonEmptyString(metadata?.email);
   const plan = nonEmptyString(metadata?.planType);
   if (selectedGroups.length === 0) {
     return [{
@@ -170,7 +168,9 @@ async function fetchProviderUsage(refresh = false): Promise<string> {
       windowsHide: true,
     });
   }
-  const { stdout } = await execFileAsync(bin, ["usage", "--json", "--redact"], {
+  // Unredacted so accounts show their real email; only the parsed label, plan
+  // and windows reach the browser, never the raw metadata.
+  const { stdout } = await execFileAsync(bin, ["usage", "--json"], {
     timeout: USAGE_TIMEOUT_MS,
     maxBuffer: USAGE_MAX_BUFFER,
     windowsHide: true,
