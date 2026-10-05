@@ -18,13 +18,17 @@ function mount(initial = {}) {
   }, { initialProps: { enabled: true } });
 }
 
-function touch(type, x, y, { target = document.body, count = 1, identifier = 1, cancelable = true } = {}) {
+function touch(type, x, y, { target = document.body, count = 1, identifier = 1, cancelable = true, onPreventDefault } = {}) {
   const point = { identifier, clientX: x, clientY: y };
   const event = new window.Event(type, { bubbles: true, cancelable });
   Object.defineProperties(event, {
     touches: { value: type === "touchend" || type === "touchcancel" ? [] : Array.from({ length: count }, (_, index) => ({ ...point, identifier: identifier + index })) },
     changedTouches: { value: [point] },
   });
+  if (onPreventDefault) {
+    const preventDefault = event.preventDefault.bind(event);
+    event.preventDefault = () => { onPreventDefault(); preventDefault(); };
+  }
   act(() => target.dispatchEvent(event));
   return event;
 }
@@ -59,13 +63,13 @@ test("intentional swipes from the screen interior open and reverse swipes close 
 
 test("short, vertical and diagonal pulls do not open drawers or steal scrolling", () => {
   const hook = mount();
-  assert.equal(swipe(140, 176).end.defaultPrevented, true);
+  assert.equal(swipe(140, 160).end.defaultPrevented, true);
   assert.equal(swipe(140, 148, { y2: 410 }).move.defaultPrevented, false);
   assert.equal(swipe(140, 226, { y2: 450 }).move.defaultPrevented, false);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
 });
 
-test("multi-touch, cancellation and a scroll already claimed by the browser abort a pending pull", () => {
+test("multi-touch and touch cancellation abort a pending pull", () => {
   const hook = mount();
   touch("touchstart", 14, 300);
   touch("touchmove", 100, 302, { count: 2 });
@@ -77,9 +81,6 @@ test("multi-touch, cancellation and a scroll already claimed by the browser abor
   touch("touchstart", 14, 300);
   touch("touchmove", 100, 302);
   touch("touchcancel", 100, 302);
-  touch("touchend", 100, 302);
-  touch("touchstart", 14, 300);
-  touch("touchmove", 100, 302, { cancelable: false });
   touch("touchend", 100, 302);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
 });
@@ -265,7 +266,7 @@ test("text selection begun during a swipe cancels navigation before or after int
   assert.equal(hook.result.current.leftOpen, false);
   window.getSelection().removeAllRanges();
   touch("touchstart", 140, 300, { target: text });
-  touch("touchmove", 160, 301, { target: text });
+  touch("touchmove", 180, 301, { target: text });
   select();
   assert.equal(touch("touchmove", 240, 302, { target: text }).defaultPrevented, false);
   touch("touchend", 240, 302, { target: text });
@@ -275,8 +276,95 @@ test("text selection begun during a swipe cancels navigation before or after int
 test("a horizontal start that curves into a mostly vertical drag does not navigate", () => {
   const hook = mount();
   touch("touchstart", 140, 300);
-  touch("touchmove", 160, 301);
+  touch("touchmove", 180, 301);
   touch("touchmove", 240, 520);
   touch("touchend", 240, 520);
+  assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
+});
+
+test("top-bar panels block swipes starting outside their own content", () => {
+  const hook = mount();
+  const panel = document.createElement("div");
+  document.body.append(panel);
+  for (const marker of ["data-top-panel", "data-branch-panel"]) {
+    panel.setAttribute(marker, "");
+    assert.equal(swipe(140, 240).move.defaultPrevented, false);
+    assert.equal(hook.result.current.leftOpen, false);
+    panel.removeAttribute(marker);
+  }
+  panel.remove();
+  swipe(140, 240);
+  assert.equal(hook.result.current.leftOpen, true);
+});
+
+test("a naturally curved swipe with vertical drift still opens the intended sidebar", () => {
+  const hook = mount();
+  touch("touchstart", 140, 300);
+  touch("touchmove", 154, 316);
+  touch("touchmove", 182, 330);
+  touch("touchmove", 228, 362);
+  touch("touchend", 228, 362);
+  assert.deepEqual(hook.result.current, { leftOpen: true, rightOpen: false });
+});
+
+test("a shorter deliberate horizontal swipe does not require a long precise drag", () => {
+  const hook = mount();
+  swipe(140, 180, { y2: 325 });
+  assert.equal(hook.result.current.leftOpen, true);
+});
+
+test("recognition follows overall displacement after an initial corrective movement", () => {
+  const hook = mount();
+  touch("touchstart", 180, 300);
+  touch("touchmove", 195, 301);
+  touch("touchmove", 170, 310);
+  touch("touchmove", 120, 325);
+  touch("touchend", 120, 325);
+  assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: true });
+});
+
+test("an open drawer tolerates a small wrong-way start before a clear closing swipe", () => {
+  const hook = mount({ rightOpen: true });
+  touch("touchstart", 180, 300);
+  touch("touchmove", 165, 302);
+  touch("touchmove", 205, 318);
+  touch("touchmove", 245, 340);
+  touch("touchend", 245, 340);
+  assert.equal(hook.result.current.rightOpen, false);
+});
+
+test("a curved swipe remains tracked when initial browser panning makes later moves non-cancelable", () => {
+  const hook = mount();
+  touch("touchstart", 140, 300);
+  touch("touchmove", 154, 316);
+  let prevented = 0;
+  const ownedByBrowser = { cancelable: false, onPreventDefault: () => { prevented += 1; } };
+  touch("touchmove", 182, 330, ownedByBrowser);
+  touch("touchmove", 228, 362, ownedByBrowser);
+  touch("touchend", 228, 362, ownedByBrowser);
+  assert.equal(prevented, 0);
+  assert.deepEqual(hook.result.current, { leftOpen: true, rightOpen: false });
+});
+
+test("an overlay dismissed by pointerdown still owns the following touch gesture", () => {
+  const hook = mount();
+  const panel = document.createElement("div");
+  panel.setAttribute("data-top-panel", "");
+  document.body.append(panel);
+  document.addEventListener("pointerdown", () => panel.remove(), { once: true });
+  const press = new window.Event("pointerdown", { bubbles: true });
+  Object.defineProperty(press, "pointerType", { value: "touch" });
+  act(() => document.body.dispatchEvent(press));
+  assert.equal(swipe(140, 240).move.defaultPrevented, false);
+  assert.equal(hook.result.current.leftOpen, false);
+});
+
+test("a slight horizontal wobble before vertical scrolling does not seize the gesture", () => {
+  const hook = mount();
+  touch("touchstart", 200, 300);
+  assert.equal(touch("touchmove", 213, 312).defaultPrevented, false);
+  assert.equal(touch("touchmove", 214, 360).defaultPrevented, false);
+  assert.equal(touch("touchmove", 214, 420).defaultPrevented, false);
+  touch("touchend", 214, 420);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
 });
