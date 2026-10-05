@@ -774,7 +774,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     setValue((current) => mergeRecoveredText(current, recovery));
     const images = recovery.images ?? [];
     if (images.length) {
-      setAttachedImages((prev) => [...prev, ...draftImagesToAttachedImages(images.slice(0, MAX_ATTACHED_IMAGES - prev.length))]);
+      setAttachedImages((prev) => [...prev, ...draftImagesToAttachedImages(images)]);
     }
     setAtQuery(null);
     setHistoryMenuOpen(false);
@@ -1350,8 +1350,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setQueuedDeleteTarget(null);
       if (!removed || action !== "edit") return;
       // Recover through the store even if a new composer now owns this key.
-      // omp labels an image-only message "[Image]": the label is not text.
-      recoverDraft(key, { text: entry.text === "[Image]" ? "" : entry.text, images: removed });
+      // omp labels an image-only message "[Image]": not text when it has images.
+      recoverDraft(key, { text: entry.text === "[Image]" && removed.length > 0 ? "" : entry.text, images: removed });
     } catch (error) {
       setQueuedDeleteTarget(null);
       toast.error(error instanceof Error ? error.message : String(error));
