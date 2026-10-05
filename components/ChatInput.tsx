@@ -190,7 +190,7 @@ interface Props {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   /** Session stats shown in the context ring popover. */
   sessionStats?: SessionStatsInfo | null;
-  /** Top-bar mount point for the session information control. */
+  /** Mobile top-bar mount point for the session information control. */
   sessionInfoContainer?: HTMLDivElement | null;
   /** Model capacity shown in the context ring popover. */
   modelCapacity?: { contextWindow?: number; maxTokens?: number } | null;
@@ -393,6 +393,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [composerContextContainer, setComposerContextContainer] = useState<HTMLDivElement | null>(null);
+  const contextContainer = isMobile ? sessionInfoContainer : composerContextContainer;
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [plusExpanded, setPlusExpanded] = useState<"tools" | "advisor" | null>(null);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
@@ -1759,7 +1761,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const panel = contextWrapRef.current?.querySelector<HTMLElement>('[role="dialog"]');
     if (contextOpen && panel) {
       const active = document.activeElement;
-      contextReturnFocusRef.current = active instanceof HTMLElement ? active : null;
+      contextReturnFocusRef.current ??= active instanceof HTMLElement ? active : null;
       panel.focus();
     } else if (!contextOpen) {
       const previous = contextReturnFocusRef.current;
@@ -1769,7 +1771,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         previous.focus();
       }
     }
-  }, [contextOpen, sessionInfoContainer]);
+  }, [contextOpen, contextContainer]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -3160,8 +3162,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </span>
             )}
 
-            {/* Keep live session information with the composer state, but render it in the top bar. */}
-            {onCompact && sessionInfoContainer && createPortal(
+            {/* Desktop keeps the control in the composer; mobile uses the header mount. */}
+            {onCompact && (
+              <div ref={setComposerContextContainer} style={{ display: isMobile ? "none" : undefined, flexShrink: 0 }} />
+            )}
+            {onCompact && contextContainer && createPortal(
               <div
                 ref={contextWrapRef}
                 style={{ position: "relative", flexShrink: 0 }}
@@ -3229,10 +3234,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     className="picker-panel"
                     style={{
                       position: isMobile ? "fixed" : "absolute",
-                      top: isMobile ? "calc(52px + env(safe-area-inset-top))" : "calc(100% + 8px)",
                       ...(isMobile
-                        ? { left: 8, right: 8 }
-                        : { right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
+                        ? { top: "calc(52px + env(safe-area-inset-top))", left: 8, right: 8 }
+                        : { bottom: "calc(100% + 8px)", right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
                       background: "var(--bg-panel)",
                       border: "1px solid var(--border)",
                       borderRadius: "var(--radius-card)",
@@ -3289,7 +3293,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   </div>
                 )}
               </div>,
-              sessionInfoContainer,
+              contextContainer,
             )}
 
             {/* Dictation */}

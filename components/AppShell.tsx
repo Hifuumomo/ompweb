@@ -2156,7 +2156,7 @@ export function AppShell() {
               alignItems: "center",
               justifyContent: "flex-end",
               gap: 6,
-              paddingRight: (rightPanelOpen ? 8 : 44) + (showChat ? 36 : 0),
+              paddingRight: rightPanelOpen ? 8 : 44,
               minWidth: hasGenerationSpeed ? "calc(10ch + 33px)" : 0,
               width: hasGenerationSpeed ? 200 : 0,
               fontSize: 11,
@@ -2213,7 +2213,7 @@ export function AppShell() {
               );
             })()}
           </div>
-          {showChat && (
+          {isMobile && showChat && (
             <div
               ref={setSessionInfoContainer}
               className="shell-session-info"
