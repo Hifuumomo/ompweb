@@ -29,6 +29,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
+- Balance the composer icons on phones and narrow toolbars with a slightly smaller effort-level icon and a larger Slow-mode snail, while keeping menu icon sizes unchanged.
 - Fix settings crashes, stalled session catch-up, and failed voice transcription polling in browsers without `AbortSignal.timeout`, `AbortSignal.any`, or `Promise.withResolvers`, including development-mode clients. Client requests now use `AbortController` timers and ordinary promises while retaining timeouts and cancellation (#196).
 - The **Agent environment variables** editor in Settings → System & Updates now sits below its title and description and follows the page width, instead of sitting beside them and extending past the right edge. The text box also grows with its contents.
 - Show queued steers and follow-ups on every device viewing a session. The queue panel now shows omp's own queue (omp 18.4.4 or later) instead of a copy kept by the tab that sent them, so it also stays correct across reloads.

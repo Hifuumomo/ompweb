@@ -2056,10 +2056,14 @@ pre, code {
   }
   /* Glyph-only trigger: size up to read level with the 14px lucide icons. */
   .composer-thinking-control > button > .composer-thinking-glyph {
-    font-size: 20px;
+    font-size: 18px;
   }
   .picker-thinking-card > .composer-thinking-glyph {
     font-size: 16px;
+  }
+  .composer-slow-control > svg {
+    width: 14px;
+    height: 14px;
   }
   .composer-fast-control,
   .composer-slow-control {
@@ -2100,10 +2104,14 @@ pre, code {
     display: none;
   }
   .composer-thinking-control > button > .composer-thinking-glyph {
-    font-size: 20px;
+    font-size: 18px;
   }
   .picker-thinking-card > .composer-thinking-glyph {
     font-size: 16px;
+  }
+  .composer-slow-control > svg {
+    width: 14px;
+    height: 14px;
   }
 }
 .composer-control-shelf {
