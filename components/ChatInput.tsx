@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, memo, KeyboardEvent } from "react";
-import { ChevronDown, ClipboardPaste, ListChecks, Loader2, Mic, Paperclip, Plus, Shrink, Snail, Sparkles, Wrench, X, Zap } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ChevronDown, ClipboardPaste, ListChecks, Loader2, Mic, Paperclip, Plus, RotateCw, Shrink, Snail, Sparkles, Wrench, X, Zap } from "lucide-react";
 import { getSubmitDuringRunBehavior, isWordCompletionEnabled } from "@/lib/composer-prefs";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { ActiveGoal, ActivePlan } from "@/lib/web-mode-state";
@@ -14,7 +15,7 @@ import type { SttAfter } from "@/lib/stt";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
 import { RecordingDeck } from "./RecordingDeck";
-import { clearDraft, getDraft, mergeRecoveredText, recoverDraftText, setDraft, subscribeDraftRecovery } from "@/lib/draft-store";
+import { clearDraft, getDraft, mergeRecoveredText, recoverDraft, setDraft, subscribeDraftRecovery, type ChatDraftImage } from "@/lib/draft-store";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import type { AttachedImage, AttachedTextFile } from "./ChatInput-draft-attachments";
 import {
@@ -68,8 +69,17 @@ import { useWordPrediction, type PredictWord, type PredictWordFeedback } from "@
 import { acceptGhost } from "@/lib/word-prediction";
 import { GhostMirror } from "@/components/GhostMirror";
 import { useI18n } from "@/lib/i18n";
-import { selectableThinkingLevels, THINKING_LEVEL_GLYPHS } from "@/lib/thinking-levels";
+import { selectableThinkingLevels, DEFAULT_THINKING_LEVELS } from "@/lib/thinking-levels";
 import type { ToolPreset } from "@/lib/tool-presets";
+
+function ThinkingGlyph({ level }: { level: string }) {
+  if (!DEFAULT_THINKING_LEVELS.includes(level)) return null;
+  return (
+    <span className="composer-thinking-glyph" data-level={level} aria-hidden="true">
+      {level === "auto" ? <RotateCw strokeWidth={2} /> : null}
+    </span>
+  );
+}
 
 const SLOW_MODE_SAME_DAY_MS = 20 * 3_600_000;
 
@@ -140,9 +150,10 @@ interface Props {
   onPredictWord?: PredictWord;
   onPredictWordFeedback?: PredictWordFeedback;
   onAbort: () => void;
-  onSteer?: (message: string, images?: AttachedImage[]) => void;
-  onFollowUp?: (message: string, images?: AttachedImage[]) => void;
-  onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
+  /** Steer/follow-up callbacks resolve false when omp refused the message. */
+  onSteer?: (message: string, images?: AttachedImage[]) => Promise<boolean>;
+  onFollowUp?: (message: string, images?: AttachedImage[]) => Promise<boolean>;
+  onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => Promise<boolean>;
   isStreaming: boolean;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
@@ -183,18 +194,21 @@ interface Props {
   advisorActive?: boolean;
   /** Resolved advisor role (display model + reasoning) for the composer tooltips. */
   advisorModel?: { name: string; reasoning: string | null } | null;
-  /** Compact the session context from the composer toolbar. */
+  /** Compact the session context from the session information panel. */
   onCompact?: () => void;
-  /** Live context totals feeding the composer context ring. */
+  /** Live context totals feeding the session information ring. */
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   /** Session stats shown in the context ring popover. */
   sessionStats?: SessionStatsInfo | null;
+  /** Mobile top-bar mount point for the session information control. */
+  sessionInfoContainer?: HTMLDivElement | null;
   /** Model capacity shown in the context ring popover. */
   modelCapacity?: { contextWindow?: number; maxTokens?: number } | null;
   /** Generation speed shown in the context ring popover. */
   generationSpeed?: GenerationSpeedInfo | null;
-  /** Cancel one pending message in omp before removing it from the queue panel. */
-  onRemoveQueuedMessage?: (text: string, queue: keyof QueuedMessages) => Promise<boolean>;
+  /** Cancel one pending message in omp before removing it from the queue
+   *  panel; resolves to its images once omp confirms, else false. */
+  onRemoveQueuedMessage?: (text: string, queue: keyof QueuedMessages) => Promise<ChatDraftImage[] | false>;
   /** Promote the first matching native follow-up into steering. */
   onPromoteQueuedToSteer?: (text: string) => void | Promise<void>;
   slashCommands?: SlashCommandInfo[];
@@ -303,15 +317,6 @@ function menuDropStyle(placement: MenuPlacement, maxHeight: number | null): Reac
   };
 }
 
-
-/** A queued message is text-only: omp refuses attachments in a steer or a
- *  follow-up, whether or not a run is active. One predicate decides both
- *  whether `sendQueued` may queue and what a refused dictation tells the user,
- *  so the rule and its explanation cannot drift apart. */
-export function queueAllowsAttachments(attachedImages: number, attachedTextFiles: number): boolean {
-  return attachedImages === 0 && attachedTextFiles === 0;
-}
-
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, usageLimit, fastModeSupported, onFastModeChange, slowModeSupported, slowModeEnabled, slowModeScope, onSlowModeChange,
   onAbortCompaction, isCompacting, compactResult,
@@ -327,6 +332,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   onCompact,
   contextUsage,
   sessionStats,
+  sessionInfoContainer,
   modelCapacity,
   generationSpeed,
   onRemoveQueuedMessage,
@@ -389,6 +395,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  // Desktop context popover height cap: the room above its trigger, so it only
+  // scrolls when the window is genuinely too short for it.
+  const [contextMaxHeight, setContextMaxHeight] = useState<number>();
+  const [composerContextContainer, setComposerContextContainer] = useState<HTMLDivElement | null>(null);
+  const contextContainer = isMobile ? sessionInfoContainer : composerContextContainer;
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [plusExpanded, setPlusExpanded] = useState<"tools" | "advisor" | null>(null);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
@@ -421,6 +432,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const modelSearchInputRef = useRef<HTMLInputElement>(null);
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const contextWrapRef = useRef<HTMLDivElement>(null);
+  const contextReturnFocusRef = useRef<HTMLElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
@@ -636,15 +648,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, []);
 
   const processFiles = useCallback((files: File[]) => {
-    if (isStreaming) {
-      setAttachError(t("chatInput.attachmentsDisabled"));
-      return;
-    }
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
     const otherFiles = files.filter((file) => !file.type.startsWith("image/"));
     void processImageFiles(imageFiles);
     void processTextFiles(otherFiles);
-  }, [isStreaming, processImageFiles, processTextFiles]);
+  }, [processImageFiles, processTextFiles]);
 
   const processFilesRef = useRef(processFiles);
   processFilesRef.current = processFiles;
@@ -783,6 +791,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const { text } = recovery;
     // Merge with pending edits rather than replacing them with a store snapshot.
     setValue((current) => mergeRecoveredText(current, recovery));
+    const images = recovery.images ?? [];
+    if (images.length) {
+      setAttachedImages((prev) => [...prev, ...draftImagesToAttachedImages(images)]);
+    }
     setAtQuery(null);
     setHistoryMenuOpen(false);
     requestAnimationFrame(() => {
@@ -902,13 +914,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       const finalText = base + sep + text;
       insertTextAtCursor(text);
       if (after && onFollowUp) {
-        // Queued messages are text-only: with attachments in the composer the
-        // queue would refuse it, so keep it here and say why.
-        if (!queueAllowsAttachments(attachedImagesRef.current.length, attachedTextFilesRef.current.length)) {
-          toast.info(t("chatInput.dictationKeptWithAttachments"));
-        } else {
-          sendQueued(after === "send" ? "followup" : after, finalText);
-        }
+        sendQueued(after === "send" ? "followup" : after, finalText);
       } else if (after && !isStreaming) {
         void handleSend(finalText);
       } else {
@@ -1262,7 +1268,18 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const msg = raw.trim();
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (sendSideQuestion(msg, overrideText)) return;
-    if (!queueAllowsAttachments(attachedImagesRef.current.length, attachedTextFilesRef.current.length)) return;
+    const images = attachedImagesRef.current.length ? attachedImagesRef.current : undefined;
+    // The queue callbacks resolve false when omp refused the message: it goes
+    // back, text and images together, to the draft it was sent from, even if
+    // the user has typed or switched sessions since.
+    const key = draftKeyRef.current;
+    const keptImages = images?.map(imageToDraftImage);
+    const recoverOnFailure = (queued: Promise<boolean>, text: string) => {
+      void Promise.resolve(queued).then((ok) => {
+        if (ok === false && key) recoverDraft(key, { text, images: keptImages });
+      });
+    };
+    const files = attachedTextFilesRef.current;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
@@ -1279,8 +1296,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       // own ACP handlers can run them.
       const expansion = expandWebSlashCommand(msg);
       if (expansion.kind === "expand") {
-        if (rejectsOversizedPrompt(expansion.prompt, attachedImagesRef.current)) return;
-        onPromptWithStreamingBehavior(expansion.prompt, streamingBehavior, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+        const prompt = composeMessageWithTextAttachments(expansion.prompt, files);
+        if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
+        recoverOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images), prompt);
         clearInput();
         return;
       }
@@ -1291,29 +1309,29 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }));
         return;
       }
-      if (rejectsOversizedPrompt(msg, attachedImagesRef.current)) return;
-      onPromptWithStreamingBehavior(msg, streamingBehavior, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+      const prompt = composeMessageWithTextAttachments(msg, files);
+      if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
+      recoverOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images), prompt);
       clearInput();
       return;
     }
-    if (rejectsOversizedPrompt(msg, attachedImagesRef.current)) return;
+    const composedMessage = composeMessageWithTextAttachments(msg, files);
+    if (rejectsOversizedPrompt(composedMessage, attachedImagesRef.current)) return;
     if (mode === "steer" && onSteer) {
-      onSteer(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+      recoverOnFailure(onSteer(composedMessage, images), composedMessage);
     } else if (mode === "followup" && onFollowUp) {
-      onFollowUp(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
+      recoverOnFailure(onFollowUp(composedMessage, images), composedMessage);
     }
     clearInput();
   }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt, sendSideQuestion]);
-  // A typed, text-only message during a run is a queued follow-up — and so is
-  // a dictation in progress: the primary button must take the same state it
+  // A typed message or attachment during a run is a queued follow-up — and so
+  // is a dictation in progress: the primary button must take the same state it
   // would have if the composer already held text. Keep Stop as the action
   // while the composer is empty and nothing is being recorded.
   const dictationCapturing = isRecording || isPaused || isReviewing;
   const primaryActionQueuesMessage =
     isStreaming
-    && (Boolean(value.trim()) || dictationCapturing)
-    && attachedImages.length === 0
-    && attachedTextFiles.length === 0
+    && (Boolean(value.trim()) || attachedImages.length > 0 || attachedTextFiles.length > 0 || dictationCapturing)
     && Boolean(onFollowUp);
 
   // ── Queued follow-up bar ────────────────────────────────────────────────
@@ -1351,7 +1369,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setQueuedDeleteTarget(null);
       if (!removed || action !== "edit") return;
       // Recover through the store even if a new composer now owns this key.
-      recoverDraftText(key, entry.text);
+      // omp labels an image-only message "[Image]": not text when it has images.
+      recoverDraft(key, { text: entry.text === "[Image]" && removed.length > 0 ? "" : entry.text, images: removed });
     } catch (error) {
       setQueuedDeleteTarget(null);
       toast.error(error instanceof Error ? error.message : String(error));
@@ -1694,7 +1713,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         saved: formatTokenCount(compactSavedTokens, locale),
       })
     : null;
-  // Composer context ring: live totals, falling back to the session snapshot.
+  // Session information ring: live totals, falling back to the session snapshot.
   const ringCtx = contextUsage ?? sessionStats?.contextUsage ?? null;
   const ringPct = ringCtx?.percent ?? null;
   const ringTone = ringPct !== null && ringPct > 90
@@ -1750,6 +1769,47 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!thinkingDropdownOpen) return;
     requestAnimationFrame(() => thinkingDropdownRef.current?.querySelector<HTMLButtonElement>('[role="menuitemradio"]:not([disabled])')?.focus());
   }, [thinkingDropdownOpen]);
+  useLayoutEffect(() => {
+    const wrap = contextWrapRef.current;
+    if (!contextOpen || isMobile || !wrap) return;
+    // --ui-scale zooms <html>: rects are in painted pixels, styles are not.
+    const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale")) || 1;
+    const room = wrap.getBoundingClientRect().top - getMenuBoundary(wrap).top;
+    setContextMaxHeight(Math.max(160, room / scale - 16));
+  }, [contextOpen, isMobile]);
+  useLayoutEffect(() => {
+    const panel = contextWrapRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+    if (contextOpen && panel) {
+      const active = document.activeElement;
+      contextReturnFocusRef.current ??= active instanceof HTMLElement ? active : null;
+      panel.focus();
+    } else if (!contextOpen) {
+      const previous = contextReturnFocusRef.current;
+      contextReturnFocusRef.current = null;
+      const active = document.activeElement;
+      if (previous?.isConnected && (active === document.body || contextWrapRef.current?.contains(active))) {
+        previous.focus();
+      }
+    }
+  }, [contextOpen, contextContainer]);
+  useEffect(() => {
+    if (!contextOpen) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+      const panel = contextWrapRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+      if (!panel?.getClientRects().length) return;
+      const popup = event.target instanceof Element
+        ? event.target.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
+        : null;
+      if (popup && !contextWrapRef.current?.contains(popup)) return;
+      // Capture Escape before the composer or global shortcut can stop a run.
+      event.preventDefault();
+      event.stopPropagation();
+      setContextOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [contextOpen]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -1780,9 +1840,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const attachmentMenuItemStyle: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 8, width: "100%",
     padding: "7px 10px", border: 0, borderRadius: 5,
-    background: "transparent", color: isStreaming ? "var(--text-dim)" : "var(--text-muted)",
-    cursor: isStreaming ? "not-allowed" : "pointer", fontSize: 12, textAlign: "left",
-    opacity: isStreaming ? 0.5 : 1,
+    background: "transparent", color: "var(--text-muted)",
+    cursor: "pointer", fontSize: 12, textAlign: "left",
   };
 
   return (
@@ -1825,7 +1884,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         // only hide files the app can attach (code, config, logs, ...).
         accept="*/*"
         multiple
-        disabled={isStreaming}
         style={{ display: "none" }}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
@@ -2744,7 +2802,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     role="menuitem"
                     type="button"
                     onClick={() => { setPlusMenuOpen(false); fileInputRef.current?.click(); }}
-                    disabled={isStreaming}
                     title={t("chatInput.attachFile")}
                     style={attachmentMenuItemStyle}
                   >
@@ -2756,7 +2813,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                       role="menuitem"
                       type="button"
                       onClick={() => void pasteClipboardImage()}
-                      disabled={isStreaming}
                       title={t("chatInput.pasteImage")}
                       style={attachmentMenuItemStyle}
                     >
@@ -2957,6 +3013,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </div>
             )}
 
+            <div className="composer-toolbar-spacer" style={{ marginLeft: "auto" }} />
+
             {/* Thinking selector — compact, expressive, and consistent with models */}
             {onThinkingLevelChange && (
               <div ref={thinkingDropdownRef} className="composer-thinking-control" style={{ position: "relative", minWidth: 0 }}>
@@ -2978,9 +3036,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   onMouseEnter={(e) => { if (!isStreaming) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; } }}
                   onMouseLeave={(e) => { e.currentTarget.style.background = thinkingDropdownOpen ? "var(--bg-hover)" : "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
                 >
-                  {/* TUI-style level glyph instead of the label, leaving the
-                      model name the room; the label stays in title/aria. */}
-                  <span className="composer-thinking-glyph" aria-hidden="true">{THINKING_LEVEL_GLYPHS[thinkingLevel ?? "auto"] ?? thinkingDisplayLabel}</span>
+                  {/* TUI-style level glyph; wide toolbars also show the level
+                      name (label hidden by CSS on narrow toolbars) and the
+                      label always stays in title/aria. */}
+                  <ThinkingGlyph level={thinkingLevel ?? "auto"} />
+                  <span className="composer-thinking-label" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "capitalize" }}>{thinkingDisplayLabel}</span>
                   <ChevronDown size={12} strokeWidth={1.8} style={{ flexShrink: 0, opacity: 0.7, transform: thinkingDropdownOpen ? "rotate(180deg)" : "none", transition: "transform var(--dur-fast) var(--ease-out-warm)" }} aria-hidden="true" />
                 </button>
                 {thinkingDropdownOpen && (
@@ -3018,7 +3078,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                         const displayLabel = (mappedVal != null && mappedVal !== lvl) ? mappedVal : lvl;
                         return (
                           <button
-                            className="picker-thinking-card"
+                            className="picker-row picker-thinking-card"
                             data-active={isActive}
                             role="menuitemradio"
                             aria-checked={isActive}
@@ -3028,7 +3088,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                             <span className="picker-check">
                               {isActive && <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>}
                             </span>
-                            <span className="composer-thinking-glyph" aria-hidden="true">{THINKING_LEVEL_GLYPHS[lvl]}</span>
+                            <ThinkingGlyph level={lvl} />
                             <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "capitalize" }}>{displayLabel}</span>
                           </button>
                         );
@@ -3121,8 +3181,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </div>
             )}
 
-            <div className="composer-toolbar-spacer" style={{ marginLeft: "auto" }} />
-
             {/* Advisor activity — thunder while the advisor model reviews this run */}
             {advisorActive && (
               <span
@@ -3140,9 +3198,15 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </span>
             )}
 
-            {/* Context ring: usage gauge opening the session context popover */}
+            {/* Desktop keeps the control in the composer; mobile uses the header mount. */}
             {onCompact && (
-              <div ref={contextWrapRef} style={{ position: "relative", flexShrink: 0 }}>
+              <div ref={setComposerContextContainer} style={{ display: isMobile ? "none" : undefined, flexShrink: 0 }} />
+            )}
+            {onCompact && contextContainer && createPortal(
+              <div
+                ref={contextWrapRef}
+                style={{ position: "relative", flexShrink: 0 }}
+              >
                 <button
                   type="button"
                   onClick={() => setContextOpen((open) => !open)}
@@ -3150,9 +3214,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   aria-label={t("composerContext.title")}
                   aria-expanded={contextOpen}
                   aria-haspopup="dialog"
+                  className="composer-context-control ui-focus-ring"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 28, height: 28, padding: 0,
+                    width: isMobile ? 44 : 28, height: isMobile ? 44 : 28, padding: 0,
                     background: contextOpen ? "var(--bg-hover)" : "none", border: "none",
                     borderRadius: 7,
                     color: isCompacting ? "var(--accent)" : "var(--text-muted)",
@@ -3195,21 +3260,21 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 {contextOpen && (
                   <div
                     role="dialog"
+                    tabIndex={-1}
                     aria-label={t("composerContext.title")}
                     className="picker-panel"
                     style={{
                       position: isMobile ? "fixed" : "absolute",
-                      bottom: isMobile ? 8 : "calc(100% + 8px)",
                       ...(isMobile
-                        ? { left: 8, right: 8 }
-                        : { right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
+                        ? { top: "calc(52px + env(safe-area-inset-top))", left: 8, right: 8 }
+                        : { bottom: "calc(100% + 8px)", right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
                       background: "var(--bg-panel)",
                       border: "1px solid var(--border)",
                       borderRadius: "var(--radius-card)",
                       boxShadow: "var(--shadow-pop)",
                       zIndex: 60,
                       padding: 12,
-                      maxHeight: isMobile ? "calc(100dvh - 32px)" : "min(50vh, 380px)",
+                      maxHeight: isMobile ? "calc(100dvh - 68px - env(safe-area-inset-top))" : contextMaxHeight,
                       overflowY: "auto",
                     }}
                   >
@@ -3258,7 +3323,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     </button>
                   </div>
                 )}
-              </div>
+              </div>,
+              contextContainer,
             )}
 
             {/* Dictation */}

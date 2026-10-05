@@ -35,6 +35,35 @@ Queue **Delete** and **Edit** additionally require `remove_queued_message`. Dele
 
 The queue panel shows omp's own queue (`queuedMessages` in `get_state` and `queue_update` events, omp 18.4.4 or later), so every device viewing a session sees the same queued messages. **Stop** moves the text of messages still waiting in the queue back into the composer instead of letting the agent run them; a steer the model already picked up through live steering still runs. Older omp runtimes show no queue panel, and Stop cannot take queued messages back.
 
+## App installation behind authentication
+
+To install the web app, sign in first and use your browser's installation menu.
+The single manifest link requests `/api/manifest` with credentials; that endpoint
+uses the existing web-password guard and private, revalidating caching. Its
+192×192 and 512×512 PNG icons are embedded from the packaged assets because
+Android's native installer fetches ordinary icon URLs without authentication
+cookies. The app still launches at `/` with scope `/`.
+
+Keep Cloudflare Access and application authentication enabled; no public
+manifest exception or Access bypass rule is needed. This does not add offline
+support. Local Chromium verification covered cookie-gated metadata with HTTP
+icon URLs blocked (zero installability errors). The owner also confirmed that
+installation on a physical phone works as expected behind Cloudflare Access.
+
+Skill startup notices require an OMP runtime with `get_skill_diagnostics`,
+`set_skill_startup_diagnostics`, and `skill_diagnostics_update`. Conflicts and
+redundant installations appear above the composer when its OMP session starts;
+an empty new-chat page does not start OMP just for diagnostics. **Details** shows
+the resolved default, variants, identical copies, backing paths, sources, and
+selection reason. The **×** button dismisses the notice for that session until
+the diagnostic report changes. **Turn off** and **Settings →
+Interface & Behavior → Skill startup notices** use OMP's persisted
+`skills.showStartupDiagnostics` preference, not a separate browser setting.
+**Settings → Extensions & Tools → Skills → View skill diagnostics** remains
+available for a selected running session when notices are off. Inspection does
+not resume stopped sessions. Missing support or no running session is unavailable,
+not a clean result.
+
 ## Quick Start
 
 **Run directly without installing:**
@@ -226,6 +255,7 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | `OMP_WEB_NO_OPEN` | Set to `1` to prevent auto-opening browser | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | Set to `1` to disable update checks and in-app updates; restart after changing | `0` |
 | `OMP_WEB_OMP_BIN` | Path to `omp` binary if not on `PATH` | _auto-detected_ |
+| `OMP_WEB_DEV_ORIGIN` | Additional allowed hostname for the development server (no scheme or port); ignored in production | _None_ |
 | `PI_CODING_AGENT_DIR` | Custom omp agent directory | `~/.omp/agent` |
 | `OMP_WEB_STT_ENDPOINT` | OpenAI-compatible transcription endpoint URL | _None (disabled)_ |
 | `OMP_WEB_STT_KEY` | Optional API key for the STT endpoint | _None_ |
@@ -241,6 +271,19 @@ npm run dev
 ```
 
 The dev server runs at [http://127.0.0.1:30178](http://127.0.0.1:30178).
+
+The development server allows loopback and RFC1918 private IPv4 origins
+(`10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`). When using a tunnel
+or reverse proxy with a custom hostname, set it without editing `next.config.ts`:
+
+```bash
+OMP_WEB_DEV_ORIGIN=dev.example.com npm run dev
+```
+
+For a persistent setup, set the variable in your local environment or service
+configuration and restart the dev server. This does not change the bind address
+or enable authentication. Next.js hostname patterns cannot express IPv6 CIDRs;
+a private IPv6 origin must be supplied explicitly (for example, `[fd00::1]`).
 
 ### Checks
 

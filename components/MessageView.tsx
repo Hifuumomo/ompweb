@@ -820,7 +820,7 @@ function AssistantMessageView({
                   style={isThisSpeaking ? { color: "var(--accent)", background: "var(--bg-hover)" } : undefined}
                 >
                   {isThisSpeaking ? <Square size={13} aria-hidden="true" /> : <Volume2 size={13} aria-hidden="true" />}
-                  <span>{isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}</span>
+                  <span>{isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.read")}</span>
                 </button>
               </Tooltip>
             )}

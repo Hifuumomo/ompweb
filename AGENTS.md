@@ -112,6 +112,7 @@ lib/
   tool-presets.ts      PRESET_NONE/DEFAULT/FULL + getToolNamesForPreset()
   types.ts             shared TypeScript types
   normalize.ts         normalizeToolCalls() — field name mismatch between file format and our types
+  navigation-history.ts  pure back/forward view-history stack + shortcut matcher (⌘[/⌘], Alt+←/→)
   word-prediction.ts   pure ghost-text arithmetic (advance/accept) for composer word prediction
   worktree.ts          project/worktree resolution and git worktree operations
 
@@ -147,6 +148,7 @@ hooks/
   useIsMobile.ts           responsive breakpoint hook
   usePrefersReducedMotion.ts OS reduce-motion preference (SMIL-safe)
   useTheme.ts              theme state (localStorage key "omp-theme")
+  useNavigationHistory.ts  in-app back/forward stack (record/peek/commit/drop) for visited chat views
   useWordPrediction.ts     debounced omp predict_word ghost text + feedback
   useBtw.ts                /btw records/active panel/history dialog fed by btw_* SSE frames
 ```
@@ -257,12 +259,14 @@ client-side — every client viewing the session must show the same queue.
 One sequence (`queueSeqRef`) orders every source: a get_state snapshot takes
 a number when requested and applies only if no newer snapshot or
 `queue_update` was applied (HTTP and SSE can reorder). Edit/Delete use
-`remove_queued_message` (act only on `removed: true`), Steer uses
+`remove_queued_message` (act only on `removed: true`; newer omp also returns
+the message's `images`, which Edit restores), Steer uses
 `promote_queued_message`; the chip changes when omp's next snapshot arrives.
 `handleAbort` coalesces overlapping Stops, then sends `abort_and_restore_queue`:
 omp's Esc (`clearQueue({ forInterrupt: true })`, then abort) in one step,
-returning the withdrawn user messages, which go to the session draft via
-`recoverDraftText`. It covers what a client snapshot cannot: a steer promoted
+returning the withdrawn user messages, whose texts and images go to the
+session draft via `recoverDraft`. omp labels an image-only message `[Image]`;
+that label is never restored as text. It covers what a client snapshot cannot: a steer promoted
 after the last `queue_update`, and live-steered input the run claimed but never
 recorded (omp would otherwise requeue it and drain it into a new turn right
 after the abort). Never reimplement this client-side. A failed request is
@@ -303,9 +307,9 @@ during the wait.
   running `btw_record` comes first.
 - `/btw <question>` and `/btw` are client builtins (`handleBuiltinSlashCommand`
   case `"btw"`). `ChatInput.sendSideQuestion` routes them there from both the
-  idle and the streaming submit path, *before* the attachment gate: never sent
-  as a prompt, never queued, and refused with a toast (draft and attachments
-  kept) while attachments are attached. Asking starts the wrapper
+  idle and the streaming submit path, *before* attachments are folded in:
+  never sent as a prompt, never queued, and refused with a toast (draft and
+  attachments kept) while attachments are attached. Asking starts the wrapper
   (`get_state`) and attaches SSE first when it is not open, so no early delta
   is lost; a second ask while one is starting is ignored.
 - The `btw` response, history snapshots and frames race (HTTP vs SSE): merge
@@ -494,6 +498,37 @@ during the wait.
 - Auth flows go through RPC commands (`get_login_providers`, `login`) against the omp child process; credentials live in omp's `agent.db` (SQLite) which omp-web never touches directly.
 - The Models panel reads and writes `models.yml` in the omp agent directory (`~/.omp/agent/models.yml`, `.yaml` fallback).
 - API-key status endpoints must never return the raw key.
+
+### Navigate back / forward (`lib/navigation-history.ts`, `hooks/useNavigationHistory.ts`)
+- Browser-style back/forward over visited chat views (sessions + the new-chat
+  composer), in-memory per page load. It is **omp-web's own stack**, never the
+  browser History API — the app only ever `router.replace`s `?session=`, and
+  the real history stack belongs to the mobile back-gesture / exit-guard
+  machinery (`useSidebarHistory` + the popstate bridge).
+- AppShell records views from one effect keyed on
+  `(selectedSession?.id, newSessionCwd)`: recording the entry the cursor
+  already sits on is a no-op, which is what makes back/forward
+  self-suppressing — `navigateInHistory` commits the step, the view lands, the
+  effect re-records the target, nothing is pushed. Any other view change
+  (sidebar/palette select, new chat, session created, fork, project-switch
+  close) pushes normally and truncates the forward branch, browser-style.
+- Applying a step: peek → resolve the session id via `/api/sessions` →
+  commit + `handleSelectSession`, or `handleNewSession` for new-chat entries.
+  A dead id (deleted session) drops that entry and tries the next one in the
+  same direction; a failed list fetch aborts without dropping. A view change
+  during the await (versioned ref) aborts the navigation so a slow fetch
+  never yanks the chat away.
+- Shortcuts live in `useGlobalKeyboardShortcuts`: ⌘[/⌘] (macOS standard),
+  Alt+←/Alt+→ (Windows/Linux standard; on macOS Alt+Arrow stays free — it is
+  word-wise caret movement), plus the mouse back/forward buttons
+  (`BrowserBack`/`BrowserForward`). The keystroke is always swallowed while a
+  handler is registered — an exhausted stack stops dead rather than falling
+  through to the browser's own back/forward, so the app is never backed out
+  of by accident — and shortcuts are skipped entirely while a
+  `[role="dialog"]` modal is open. The sidebar header buttons (before Archived
+  Sessions, wrapped in `.sidebar-nav-buttons`) disable on stack bounds, show
+  the platform shortcut in their tooltip, and hide below a 240px sidebar via
+  the `.sidebar-shell` container query (the keyboard shortcuts still work).
 
 ### Composer word prediction (`hooks/useWordPrediction.ts`, `components/GhostMirror.tsx`)
 - Ghost text comes from omp's `predict_word` RPC (engine = omp's

@@ -3,10 +3,7 @@ import {
   selectTextAttachments,
   type AttachedTextFileData,
 } from "@/lib/chat-attachments";
-import {
-  MAX_ATTACHED_IMAGES,
-  isBase64ImageWithinLimits,
-} from "@/lib/image-attachments";
+import { isBase64ImageWithinLimits } from "@/lib/image-attachments";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -27,10 +24,11 @@ export function draftImageToAttachedImage(image: ChatDraftImage): AttachedImage 
   };
 }
 
+/** Every image comes back, even past MAX_ATTACHED_IMAGES (recovered queue
+ *  messages can exceed it); sending enforces the cap, so the user chooses. */
 export function draftImagesToAttachedImages(images: ChatDraftImage[] | undefined): AttachedImage[] {
   return (images ?? [])
     .filter(isBase64ImageWithinLimits)
-    .slice(0, MAX_ATTACHED_IMAGES)
     .map(draftImageToAttachedImage);
 }
 

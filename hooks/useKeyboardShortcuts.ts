@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { isMacPlatform, navigateShortcutDirection } from "@/lib/navigation-history";
 
 // ---------------------------------------------------------------------------
 // Module-level registry — ChatWindow registers the abort handler here so that
@@ -23,6 +24,14 @@ export function registerAbortHandler(handler: (() => void) | null): void {
 interface UseGlobalKeyboardShortcutsOptions {
   /** Called when Ctrl+Alt+N is pressed. Receives current cwd. */
   onNewSession?: (cwd: string) => void;
+  /**
+   * Navigate back/forward through visited chat views. The keystroke is always
+   * preventDefault-ed when a handler is registered — an exhausted history
+   * stack stops there instead of falling through to the browser's own
+   * back/forward, so the app is never backed out of by accident.
+   */
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
   /** Best-effort native-menu selection scoping; keyboard scoping is independent. */
@@ -36,6 +45,8 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Esc          – stop the running agent (via module-level abort handler)
  *   Ctrl+Alt+N   – create a new session in the active project directory
  *   Ctrl/Cmd+A   – select the active message, transcript, or file contents
+ *   ⌘[/⌘] (Alt+←/→ on Windows/Linux, plus the mouse back/forward buttons)
+ *                – in-app navigate back/forward (see lib/navigation-history.ts)
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping
@@ -45,7 +56,7 @@ interface UseGlobalKeyboardShortcutsOptions {
 export function useGlobalKeyboardShortcuts(
   options: UseGlobalKeyboardShortcutsOptions,
 ): void {
-  const { onNewSession, activeCwd, scopeNativeSelectAll = false } = options;
+  const { onNewSession, onNavigateBack, onNavigateForward, activeCwd, scopeNativeSelectAll = false } = options;
 
   useEffect(() => {
     let interactionTarget: Element | null = null;
@@ -213,6 +224,23 @@ export function useGlobalKeyboardShortcuts(
         return;
       }
 
+      // ---- ⌘[/⌘] or Alt+←/→: in-app navigate back/forward ----
+      if (onNavigateBack || onNavigateForward) {
+        // Not while a modal is open: the palette/config dialogs own the
+        // keyboard then, and navigating the chat behind them hides the
+        // effect of the keystroke.
+        const inDialog = e.target instanceof Element && !!e.target.closest("[role='dialog']");
+        const direction = inDialog ? 0 : navigateShortcutDirection(e, isMacPlatform());
+        if (direction !== 0) {
+          // Always swallowed, including an empty stack: the browser's own
+          // back/forward must not fire from inside the app.
+          e.preventDefault();
+          if (direction === -1) onNavigateBack?.();
+          else onNavigateForward?.();
+          return;
+        }
+      }
+
       // ---- Ctrl+Alt+N: new session ----
       if (e.key === "n" && e.ctrlKey && e.altKey) {
         if (!activeCwd || !onNewSession) return;
@@ -223,5 +251,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, onNewSession]);
+  }, [activeCwd, onNewSession, onNavigateBack, onNavigateForward]);
 }

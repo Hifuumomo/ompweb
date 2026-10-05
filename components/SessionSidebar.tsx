@@ -12,7 +12,7 @@ import { toast } from "./ui/toast";
 import { clearLastOpenSession, setLastOpenSession, workspaceKeyOf } from "@/lib/workspace-memory";
 import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
-import { Archive, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import {
   EMPTY_PROJECT_SET,
@@ -69,8 +69,20 @@ interface Props {
   updateAvailable?: boolean;
   /** Opens the archived sessions browser. */
   onOpenArchive?: () => void;
+  /** In-app back/forward over visited chat views (sidebar header buttons). */
+  navigation?: {
+    canBack: boolean;
+    canForward: boolean;
+    onBack: () => void;
+    onForward: () => void;
+    /** Platform shortcut label for the tooltip, e.g. "⌘[" / "Alt+←". */
+    backShortcut: string;
+    forwardShortcut: string;
+  };
   /** True when settings full-page view is currently open. */
   settingsOpen?: boolean;
+  /** Mobile full-screen drawer only: shows a top-left close control. */
+  onClose?: () => void;
 }
 
 
@@ -78,7 +90,7 @@ interface Props {
 
 
 
-export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onWorkspaceOptionsChange, addProjectOpen, setAddProjectOpen, usageVisible = true, onOpenSettings, onOpenArchive, updateAvailable, settingsOpen = false }: Props) {
+export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onWorkspaceOptionsChange, addProjectOpen, setAddProjectOpen, usageVisible = true, onOpenSettings, onOpenArchive, navigation, updateAvailable, settingsOpen = false, onClose }: Props) {
 
 
   const { t } = useI18n();
@@ -1080,7 +1092,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     ? worktreeStateByProject[normalizeProjectKey(selectedProject)]
     : undefined;
 
-  /** Inline branch label ("omp-web · main") from a project's OWN cached Git
+  /** Branch label below the workspace name, from a project's OWN cached Git
    *  state. Returns null when the project has no Git state or is not a git
    *  repo, so a non-Git / not-yet-loaded project never shows another repo's
    *  branch. */
@@ -1153,7 +1165,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   ) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
+    <div className="sidebar-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
       {addProjectOpen && (
         <DirectoryPicker
           busy={addProjectBusy}
@@ -1188,8 +1200,43 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <OmpWebTitle />
+          <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                title={t("appShell.hideSidebar")}
+                aria-label={t("appShell.hideSidebar")}
+                className="shell-toolbar-btn ui-focus-ring"
+              >
+                <X size={16} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            )}
+            <OmpWebTitle />
+          </div>
           <div style={{ display: "flex", gap: 2 }}>
+            {navigation && (
+              <span className="sidebar-nav-buttons">
+                <Tooltip content={`${t("sessionSidebar.navigateBack")} (${navigation.backShortcut})`} side="bottom">
+                  <SidebarIconButton
+                    label={t("sessionSidebar.navigateBack")}
+                    onClick={navigation.onBack}
+                    disabled={!navigation.canBack}
+                  >
+                    <ArrowLeft size={15} strokeWidth={1.9} aria-hidden="true" />
+                  </SidebarIconButton>
+                </Tooltip>
+                <Tooltip content={`${t("sessionSidebar.navigateForward")} (${navigation.forwardShortcut})`} side="bottom">
+                  <SidebarIconButton
+                    label={t("sessionSidebar.navigateForward")}
+                    onClick={navigation.onForward}
+                    disabled={!navigation.canForward}
+                  >
+                    <ArrowRight size={15} strokeWidth={1.9} aria-hidden="true" />
+                  </SidebarIconButton>
+                </Tooltip>
+              </span>
+            )}
             {onOpenArchive && (
               <Tooltip content={t("sessionSidebar.archiveBrowserTitle")} side="bottom">
                 <SidebarIconButton

@@ -363,7 +363,12 @@ test("the queue panel shows omp's snapshot on load and follows queue_update, not
 
 test("queued cancellation reports omp's answer and leaves the chip to the snapshot", async (t) => {
   for (const outcome of [
-    { name: "removed", response: { value: { success: true, data: { removed: true } } }, result: true, notices: [] },
+    {
+      name: "removed",
+      response: { value: { success: true, data: { removed: true, images: [{ type: "image", data: "AAAA", mimeType: "image/png" }, { bogus: true }] } } },
+      result: [{ data: "AAAA", mimeType: "image/png" }],
+      notices: [],
+    },
     { name: "not pending", response: { value: { success: true, data: { removed: false } } }, result: false, notices: ["warning"] },
     { name: "unsupported", response: { status: 400, value: { error: "Unknown RPC command: remove_queued_message" } }, result: false, notices: ["error"] },
   ]) {
@@ -390,7 +395,7 @@ test("queued cancellation reports omp's answer and leaves the chip to the snapsh
       ]);
       await act(async () => {
         release(outcome.response);
-        assert.equal(await first, outcome.result);
+        assert.deepEqual(await first, outcome.result);
       });
       assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target", "target"] });
       assert.deepEqual(w.latest.notices.map((n) => n.type), outcome.notices);
@@ -581,7 +586,7 @@ test("a cancellation omp confirms after unmount still reports success so Edit ca
   await act(async () => { cancellation = w.latest.removeQueuedMessage("target", "followUp"); });
   w.unmount();
   release({ value: { success: true, data: { removed: true } } });
-  assert.equal(await cancellation, true);
+  assert.deepEqual(await cancellation, [], "an omp that returns no images still confirms the removal");
 });
 
 test("a Stop whose run ended during the withdrawal does not abort the next prompt", async () => {
@@ -3190,8 +3195,11 @@ test("Stop takes queued input back through omp in one step, including a steer th
   primeSession("abort-atomic", [userMsg("u0", "loaded question")]);
   const { w } = await startRun("abort-atomic", "hello agent");
   world.abortRestoreQueue = {
-    steering: [{ text: "steer the snapshot missed" }],
-    followUp: [{ text: "later follow-up", images: [{ type: "image", data: "x", mimeType: "image/png" }] }],
+    steering: [{ text: "steer the snapshot missed" }, { text: "[Image]" }],
+    followUp: [
+      { text: "later follow-up", images: [{ type: "image", data: "x", mimeType: "image/png" }] },
+      { text: "[Image]", images: [{ type: "image", data: "y", mimeType: "image/webp" }] },
+    ],
   };
 
   await act(async () => { await w.latest.handleAbort(); });
@@ -3200,7 +3208,8 @@ test("Stop takes queued input back through omp in one step, including a steer th
   assert.equal(commands.filter((type) => type === "abort_and_restore_queue").length, 1);
   assert.equal(commands.includes("abort"), false, "omp's own abort already stopped the run");
   assert.equal(commands.includes("remove_queued_message"), false);
-  assert.equal(getDraft("abort-atomic")?.value, "steer the snapshot missed\n\nlater follow-up");
+  assert.equal(getDraft("abort-atomic")?.value, "steer the snapshot missed\n\n[Image]\n\nlater follow-up", "only an image-only message's label is dropped");
+  assert.deepEqual(getDraft("abort-atomic")?.images, [{ data: "x", mimeType: "image/png" }, { data: "y", mimeType: "image/webp" }]);
   assert.deepEqual(w.latest.notices, []);
   clearDraft("abort-atomic");
 });
@@ -3284,4 +3293,325 @@ test("overlapping Stops share one atomic withdrawal; an image-only entry does no
   assert.equal(world.calls.filter((c) => c.body?.type === "abort_and_restore_queue").length, 1);
   assert.equal(getDraft("abort-atomic-twice")?.value, "words");
   clearDraft("abort-atomic-twice");
+});
+
+function skillDiagnosticsSnapshot(showStartupDiagnostics, name = "review") {
+  return {
+    cwd: "/workspace",
+    showStartupDiagnostics,
+    diagnostics: [{
+      name,
+      reason: "source-order",
+      skills: [
+        { name, filePath: `/workspace/.agents/skills/${name}/SKILL.md`, source: "project" },
+        { name, filePath: `/home/me/.agents/skills/${name}/SKILL.md`, source: "user", pluginName: "shared" },
+      ],
+      duplicates: [{
+        skill: { name, filePath: `/mirror/.agents/skills/${name}/SKILL.md`, source: "custom" },
+        retained: { name, filePath: `/workspace/.agents/skills/${name}/SKILL.md`, source: "project" },
+      }],
+    }],
+  };
+}
+
+test("skill diagnostics hydrate from state and follow defensive live updates", async () => {
+  resetWorld();
+  primeSession("skill-state", [userMsg("u0", "q")]);
+  const initial = skillDiagnosticsSnapshot(true);
+  world.agents.set("skill-state", {
+    running: true,
+    state: {
+      skillDiagnostics: {
+        ...initial,
+        diagnostics: [{
+          ...initial.diagnostics[0],
+          skills: initial.diagnostics[0].skills.map((skill) => ({ ...skill, body: "private" })),
+          privateDiagnostic: true,
+        }],
+        privateSnapshot: true,
+      },
+    },
+  });
+
+  const w = await mountSession("skill-state");
+  assert.deepEqual(w.latest.skillDiagnostics, initial, "get_state hydration recovers a startup frame emitted before SSE attached");
+
+  const updated = skillDiagnosticsSnapshot(false, "deploy");
+  await act(() => lastEs().emit({
+    type: "skill_diagnostics_update",
+    data: { ...updated, containRoot: "/private" },
+  }));
+  assert.deepEqual(w.latest.skillDiagnostics, updated);
+
+  await act(() => lastEs().emit({
+    type: "skill_diagnostics_update",
+    data: { cwd: "/workspace", showStartupDiagnostics: true, diagnostics: "none" },
+  }));
+  assert.equal(w.latest.skillDiagnostics, null, "malformed data is unsupported, not a fabricated clean result");
+
+  const recovered = skillDiagnosticsSnapshot(true, "recovered");
+  world.agents.set("skill-state", { running: true, state: { skillDiagnostics: recovered } });
+  await act(async () => {
+    lastEs().open();
+    await sleep(30);
+  });
+  assert.deepEqual(w.latest.skillDiagnostics, recovered, "stream attachment reconciles an update emitted before SSE attached");
+});
+
+/** Start the startup-diagnostics setter with its POST held. `respond` answers the held POST; `saving` is the hook's promise. */
+async function startHeldSkillSetter(w, sid, enabled) {
+  let respond;
+  world.holds.push({
+    match: (method, url, body) => method === "POST" && url.includes(`/api/agent/${sid}`) && body?.type === "set_skill_startup_diagnostics",
+    produce: () => new Promise((resolve) => { respond = (data) => resolve({ value: { success: true, data } }); }),
+  });
+  let saving;
+  await act(async () => {
+    saving = w.latest.setSkillStartupDiagnostics(enabled);
+    await sleep(20);
+  });
+  // The test awaits `saving` itself; this only keeps a failed assertion from leaving an unhandled rejection behind.
+  saving.catch(() => {});
+  return { saving, respond: (data) => respond(data) };
+}
+
+test("the startup diagnostics setter publishes OMP's effective snapshot and rejects unsupported replies", async () => {
+  resetWorld();
+  primeSession("skill-actions", [userMsg("u0", "q")]);
+  const on = skillDiagnosticsSnapshot(true);
+  const off = skillDiagnosticsSnapshot(false);
+  world.agents.set("skill-actions", { running: false, state: { skillDiagnostics: on } });
+  const w = await mountSession("skill-actions");
+  assert.deepEqual(w.latest.skillDiagnostics, on);
+
+  world.holds.push({
+    match: (method, url, body) => method === "POST" && url.includes("/api/agent/skill-actions") && body?.type === "set_skill_startup_diagnostics",
+    produce: async () => ({ value: { success: true, data: off } }),
+  });
+  let disabled;
+  await act(async () => {
+    disabled = await w.latest.setSkillStartupDiagnostics(false);
+  });
+  assert.deepEqual(disabled, off);
+  assert.deepEqual(w.latest.skillDiagnostics, off, "the effective snapshot replaces the previous one");
+
+  world.holds.push({
+    match: (method, url, body) => method === "POST" && url.includes("/api/agent/skill-actions") && body?.type === "set_skill_startup_diagnostics",
+    produce: async () => ({ value: { success: true, data: off } }),
+  });
+  let overridden;
+  await act(async () => {
+    overridden = await w.latest.setSkillStartupDiagnostics(true);
+  });
+  assert.deepEqual(overridden, off, "an override that keeps the setting off is returned as the effective value, not the requested one");
+  assert.deepEqual(w.latest.skillDiagnostics, off);
+
+  world.holds.push({
+    match: (method, url, body) => method === "POST" && url.includes("/api/agent/skill-actions") && body?.type === "set_skill_startup_diagnostics",
+    produce: async () => ({ value: { success: true, data: { cwd: "/workspace", showStartupDiagnostics: false, diagnostics: null } } }),
+  });
+  await assert.rejects(() => w.latest.setSkillStartupDiagnostics(false), /skill diagnostics/i);
+  assert.deepEqual(w.latest.skillDiagnostics, off, "a malformed response cannot erase the last supported snapshot");
+  await assert.rejects(() => w.latest.setSkillStartupDiagnostics("false"), /boolean/i);
+});
+
+test("the startup diagnostics setter does not start an empty chat and rejects stale session responses", async () => {
+  resetWorld();
+  const empty = await mountSession(null);
+  const callsBefore = world.calls.length;
+  await assert.rejects(() => empty.latest.setSkillStartupDiagnostics(false), /active session/i);
+  assert.equal(world.calls.length, callsBefore, "no active session means no lazy child-start request");
+
+  primeSession("old-skills", [userMsg("u0", "old")]);
+  const old = await mountSession("old-skills");
+  const held = await startHeldSkillSetter(old, "old-skills", false);
+  old.unmount();
+
+  primeSession("current-skills", [userMsg("u0", "current")]);
+  const current = await mountSession("current-skills");
+  held.respond(skillDiagnosticsSnapshot(false, "stale"));
+  await assert.rejects(held.saving, /stale/i);
+  assert.equal(current.latest.skillDiagnostics, null, "the previous chat cannot update the selected chat");
+});
+
+test("a saved setting whose own update frame beats the HTTP response resolves to the saved snapshot", async () => {
+  resetWorld();
+  primeSession("skill-own-frame", [userMsg("u0", "q")]);
+  const enabled = skillDiagnosticsSnapshot(true, "own-frame");
+  world.agents.set("skill-own-frame", { running: true, state: { skillDiagnostics: enabled } });
+  const w = await mountSession("skill-own-frame");
+  assert.deepEqual(w.latest.skillDiagnostics, enabled);
+
+  const { saving, respond } = await startHeldSkillSetter(w, "skill-own-frame", false);
+  const saved = skillDiagnosticsSnapshot(false, "own-frame");
+  try {
+    // OMP emits the update frame before it answers the command.
+    await act(() => lastEs().emit({ type: "skill_diagnostics_update", data: saved }));
+    assert.deepEqual(w.latest.skillDiagnostics, saved);
+  } finally {
+    respond(saved);
+  }
+  let result;
+  await act(async () => {
+    result = await saving;
+  });
+  assert.deepEqual(result, saved, "the control reports the saved setting instead of a stale failure");
+  assert.deepEqual(w.latest.skillDiagnostics, saved);
+});
+
+test("a setter response overtaken by a newer update returns the current snapshot without rolling it back", async () => {
+  resetWorld();
+  primeSession("skill-newer-frame", [userMsg("u0", "q")]);
+  world.agents.set("skill-newer-frame", { running: true, state: { skillDiagnostics: skillDiagnosticsSnapshot(true, "before") } });
+  const w = await mountSession("skill-newer-frame");
+
+  const { saving, respond } = await startHeldSkillSetter(w, "skill-newer-frame", false);
+  const newer = skillDiagnosticsSnapshot(false, "after-reload");
+  try {
+    await act(() => lastEs().emit({ type: "skill_diagnostics_update", data: newer }));
+  } finally {
+    respond(skillDiagnosticsSnapshot(false, "answered-before-reload"));
+  }
+  let result;
+  await act(async () => {
+    result = await saving;
+  });
+  assert.deepEqual(result, newer);
+  assert.deepEqual(w.latest.skillDiagnostics, newer, "the older response never replaces a newer update");
+});
+
+test("a state snapshot requested before a newer skill update cannot overwrite it when it resolves late", async () => {
+  resetWorld();
+  primeSession("skill-order", [userMsg("u0", "q")]);
+  world.agents.set("skill-order", { running: true, state: { skillDiagnostics: skillDiagnosticsSnapshot(true, "startup") } });
+  const w = await mountSession("skill-order");
+
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/agent/skill-order",
+    produce: () => new Promise((resolve) => {
+      release = () => resolve({ value: { running: true, state: { skillDiagnostics: skillDiagnosticsSnapshot(true, "stale-state") } } });
+    }),
+  });
+  const newer = skillDiagnosticsSnapshot(false, "newer-update");
+  try {
+    await act(async () => {
+      lastEs().open(); // stream attachment requests an authoritative state snapshot
+      await sleep(20);
+    });
+    assert.ok(release, "precondition: the snapshot request is still in flight");
+    await act(() => lastEs().emit({ type: "skill_diagnostics_update", data: newer }));
+    assert.deepEqual(w.latest.skillDiagnostics, newer);
+  } finally {
+    release?.();
+  }
+  await act(async () => {
+    await sleep(30);
+  });
+  assert.deepEqual(w.latest.skillDiagnostics, newer, "the late older snapshot is dropped");
+});
+
+test("a fresh chat hydrates and follows skill diagnostics after slash discovery creates its runtime", async () => {
+  resetWorld();
+  const startup = skillDiagnosticsSnapshot(true, "fresh-startup");
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: async () => ({ value: { sessionId: "fresh-skills" } }),
+  });
+  world.agents.set("fresh-skills", { running: true, state: { skillDiagnostics: startup } });
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace" });
+  assert.equal(w.latest.skillDiagnostics, null, "an empty new-chat page has no runtime or diagnostics");
+  assert.deepEqual(world.esInstances, [], "mounting an empty new chat must not attach a stream");
+
+  await act(async () => { await w.latest.loadSlashCommands(); });
+  const es = lastEs();
+  assert.match(es?.url ?? "", /\/api\/agent\/fresh-skills\/events$/, "the created runtime must be observed before its first prompt");
+  await act(async () => {
+    es.open();
+    await sleep(30);
+  });
+  assert.deepEqual(w.latest.skillDiagnostics, startup, "the startup frame emitted before attachment is recovered from state");
+
+  const updated = skillDiagnosticsSnapshot(false, "fresh-updated");
+  await act(() => es.emit({ type: "skill_diagnostics_update", data: updated }));
+  assert.deepEqual(w.latest.skillDiagnostics, updated, "live diagnostics follow the created runtime");
+  assert.equal(callsTo("POST", "/api/agent/fresh-skills").some((call) => call.body?.type === "prompt"), false, "discovery never starts a model run");
+  w.unmount();
+});
+
+test("a fresh chat runtime created after unmount cannot attach or apply skill diagnostics", async () => {
+  resetWorld();
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { sessionId: "stale-fresh" } }); }),
+  });
+  world.agents.set("stale-fresh", { running: true, state: { skillDiagnostics: skillDiagnosticsSnapshot(true, "stale-fresh") } });
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace" });
+  let discovery;
+  await act(async () => {
+    discovery = w.latest.loadSlashCommands();
+    await sleep(20);
+    w.unmount();
+  });
+  await act(async () => {
+    release();
+    await discovery;
+    await sleep(30);
+  });
+  assert.deepEqual(world.esInstances, [], "a stale create must not leak an event stream");
+  assert.equal(callsTo("GET", "/api/agent/stale-fresh").length, 0, "a stale create must not request diagnostics for a switched chat");
+  assert.equal(w.latest.skillDiagnostics, null);
+});
+
+test("a fresh chat's first prompt attaches one event stream instead of an observer plus its own", async () => {
+  resetWorld();
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: async () => ({ value: { sessionId: "fresh-send" } }),
+  });
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: () => {} });
+  let sent;
+  await act(async () => {
+    sent = w.latest.handleSend("first prompt");
+    await sleep(30); // create the runtime and attach the prompt's stream
+  });
+  const streamsBeforeOpen = world.esInstances.length;
+  let delivered;
+  // Settle the send before asserting, so a failed assertion leaves no run behind.
+  await act(async () => {
+    lastEs().open();
+    delivered = await sent;
+  });
+  w.unmount();
+  assert.equal(delivered, true);
+  assert.equal(streamsBeforeOpen, 1, "the prompt owns the only stream");
+  assert.equal(world.esInstances.length, 1);
+  assert.equal(callsTo("POST", "/api/agent/fresh-send").some((call) => call.body?.type === "prompt"), true);
+});
+
+test("a fresh chat's /btw question attaches one event stream instead of an observer plus its own", async () => {
+  resetWorld();
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: async () => ({ value: { sessionId: "fresh-btw" } }),
+  });
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord() } } }));
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: () => {} });
+  let asked;
+  await act(async () => {
+    asked = w.latest.handleBuiltinSlashCommand("/btw what is 2+2");
+    await sleep(30); // create the runtime and attach the question's stream
+  });
+  const streamsBeforeOpen = world.esInstances.length;
+  let result;
+  // Settle the question before asserting, so a failed assertion leaves no request behind.
+  await act(async () => {
+    lastEs().open();
+    result = await asked;
+  });
+  w.unmount();
+  assert.deepEqual(result, { handled: true });
+  assert.equal(streamsBeforeOpen, 1, "the question owns the only stream");
+  assert.equal(world.esInstances.length, 1);
 });

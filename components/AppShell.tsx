@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSidebarHistory } from "@/hooks/useSidebarHistory";
 import { useModalDialog } from "@/hooks/useModalDialog";
+import { useNavigationHistory } from "@/hooks/useNavigationHistory";
+import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } from "@/lib/navigation-history";
+import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
 import { toast } from "./ui/toast";
@@ -17,7 +20,7 @@ import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
-import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, X, Zap } from "lucide-react";
+import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
@@ -648,6 +651,7 @@ export function AppShell() {
   }, [resetAppUpdateVisibleStage]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const [sessionInfoContainer, setSessionInfoContainer] = useState<HTMLDivElement | null>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -762,8 +766,7 @@ export function AppShell() {
     });
   }, [activeTopPanel, systemPrompt, systemPromptLoading, toggleTopPanel]);
 
-  // The topbar session panel is gone (its content lives in the composer ring
-  // popover), so /session opens that instead.
+  // /session opens the same information panel as the top-bar control.
   const openSessionStatsPanel = useCallback(() => {
     chatInputRef.current?.openContextPanel();
   }, []);
@@ -970,6 +973,12 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const closeRightPanel = useCallback(() => {
+    setRightPanelOpen(false);
+    if (!isCompactOverlay) {
+      topBarRef.current?.querySelector<HTMLButtonElement>(".shell-panel-opener")?.focus();
+    }
+  }, [isCompactOverlay]);
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
   const [rightView, setRightView] = useState<"explorer" | "git" | "file">("explorer");
   // User-chosen pixel width (null = fluid 42% default), persisted.
@@ -983,13 +992,20 @@ export function AppShell() {
   const [rightPanelMounted, setRightPanelMounted] = useState(false);
   const rightPanelIsModal = isCompactOverlay && rightPanelMounted && rightPanelOpen && !settingsTab;
   const rightPanelRef = useModalDialog<HTMLDivElement>({
-    onClose: () => setRightPanelOpen(false),
+    onClose: closeRightPanel,
     active: rightPanelIsModal,
   });
   const attachRightPanel = useCallback((element: HTMLDivElement | null) => {
     rightPanelRef.current = element;
     setRightPanelMounted(element !== null);
   }, [rightPanelRef]);
+  useMobileSidebarGestures({
+    enabled: isMobile && mobileSidebarReady && !settingsTab,
+    leftOpen: sidebarOpen,
+    rightOpen: rightPanelOpen,
+    onLeftOpenChange: setSidebarOpen,
+    onRightOpenChange: setRightPanelOpen,
+  });
   const pendingRightPanelWidthRef = useRef<number | null>(null);
   const rightResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
   useEffect(() => {
@@ -1170,7 +1186,7 @@ export function AppShell() {
     }
   }, [router, isMobile, selectedSession?.id]);
 
-  const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
+  const handleNewSession = useCallback((_sessionId: string, cwd: string | null) => {
     setSettingsTab(null);
     setSelectedSession(null);
     setNewSessionCwd(cwd);
@@ -1187,10 +1203,102 @@ export function AppShell() {
     router.replace("/", { scroll: false });
   }, [router, isMobile]);
 
+  // ---- In-app Navigate back / forward over visited chat views ----
+  // Own stack, not the browser History API (that one belongs to the mobile
+  // back-gesture/exit-guard machinery — see lib/navigation-history.ts).
+  const navigationHistory = useNavigationHistory();
+  const {
+    record: recordNavigationView,
+    peekBack: peekNavigationBack,
+    peekForward: peekNavigationForward,
+  } = navigationHistory;
+  // Bumped by the recording effect on every view change. navigateInHistory
+  // captures it across its await and bails if the user moved on meanwhile,
+  // so a slow session-list fetch can never yank the chat out from under a
+  // view the user just switched to.
+  const navViewVersionRef = useRef(0);
+  const navSessionId = selectedSession?.id ?? null;
+  const navSessionCwd = selectedSession?.cwd ?? null;
+  useEffect(() => {
+    navViewVersionRef.current += 1;
+    recordNavigationView({
+      sessionId: navSessionId,
+      cwd: navSessionId ? navSessionCwd : newSessionCwd,
+    });
+  }, [navSessionId, navSessionCwd, newSessionCwd, recordNavigationView]);
+
+  // Resolves a history entry's session id against the live list. `null`
+  // means the id is gone (entry should be dropped); "unavailable" means the
+  // list itself could not be fetched (keep the entry, abort this navigation).
+  const fetchSessionForNavigation = useCallback(async (sessionId: string): Promise<SessionInfo | null | "unavailable"> => {
+    try {
+      const res = await fetch("/api/sessions");
+      if (!res.ok) return "unavailable";
+      const data = (await res.json()) as { sessions?: SessionInfo[] };
+      return data.sessions?.find((s) => s.id === sessionId) ?? null;
+    } catch {
+      return "unavailable";
+    }
+  }, []);
+
+  const navigateInHistory = useCallback(async (direction: -1 | 1): Promise<void> => {
+    // Dead entries (deleted sessions) are skipped, like browser history
+    // skipping a dead slot; bound the loop by the stack's own cap.
+    for (let attempt = 0; attempt <= NAVIGATION_HISTORY_MAX_ENTRIES; attempt++) {
+      const entry = direction === -1 ? peekNavigationBack() : peekNavigationForward();
+      // Nothing that way: stay put. An exhausted stack never falls through to
+      // the browser's own back/forward — the keystroke is swallowed by the
+      // keyboard layer, so the app can never be backed out of by accident.
+      if (!entry) return;
+      if (entry.sessionId === null) {
+        if (direction === -1) navigationHistory.commitBack();
+        else navigationHistory.commitForward();
+        handleNewSession("navigate-history", entry.cwd);
+        return;
+      }
+      const versionAtPress = navViewVersionRef.current;
+      const session = await fetchSessionForNavigation(entry.sessionId);
+      if (navViewVersionRef.current !== versionAtPress) return; // user moved on: do nothing
+      if (session === "unavailable") return; // list fetch failed: keep the entry, try again next press
+      if (session) {
+        if (direction === -1) navigationHistory.commitBack();
+        else navigationHistory.commitForward();
+        handleSelectSession(session, false);
+        return;
+      }
+      if (direction === -1) navigationHistory.dropPeekedBack();
+      else navigationHistory.dropPeekedForward();
+    }
+  }, [navigationHistory, peekNavigationBack, peekNavigationForward, fetchSessionForNavigation, handleNewSession, handleSelectSession]);
+
+  // Shared by the sidebar buttons and the global shortcuts. The keyboard
+  // layer always swallows the keystroke, so both directions stop dead at the
+  // ends of the stack instead of continuing into browser history.
+  const handleNavigateBack = useCallback(() => {
+    void navigateInHistory(-1);
+  }, [navigateInHistory]);
+  const handleNavigateForward = useCallback(() => {
+    void navigateInHistory(1);
+  }, [navigateInHistory]);
+
+  // Tooltip shortcut labels follow the platform (⌘[ vs Alt+←). Computed from
+  // navigator after mount state to keep SSR markup stable.
+  const [navIsMac] = useState(() => isMacPlatform());
+  const sidebarNavigation = useMemo(() => ({
+    canBack: navigationHistory.canBack,
+    canForward: navigationHistory.canForward,
+    onBack: handleNavigateBack,
+    onForward: handleNavigateForward,
+    backShortcut: navigateShortcutHint(-1, navIsMac),
+    forwardShortcut: navigateShortcutHint(1, navIsMac),
+  }), [navigationHistory.canBack, navigationHistory.canForward, handleNavigateBack, handleNavigateForward, navIsMac]);
+
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
+    onNavigateBack: handleNavigateBack,
+    onNavigateForward: handleNavigateForward,
     activeCwd,
     scopeNativeSelectAll,
   });
@@ -1564,23 +1672,30 @@ export function AppShell() {
         !["absolute", "fixed"].includes(getComputedStyle(child).position));
       const contentStyle = getComputedStyle(content);
       const headerStyle = getComputedStyle(header);
-      const rightStyle = getComputedStyle(right);
       const controlsWidth = children.reduce((width, child) => {
         const style = getComputedStyle(child);
         return width + child.getBoundingClientRect().width
           + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
       }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
-      const required = controlsWidth
+      const leftNeed = controlsWidth
         + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
         + parseFloat(getComputedStyle(tools).columnGap)
-        + parseFloat(headerStyle.paddingLeft) + parseFloat(headerStyle.paddingRight)
-        + parseFloat(headerStyle.columnGap)
-        + parseFloat(rightStyle.minWidth)
-        + parseFloat(rightStyle.paddingLeft) + parseFloat(rightStyle.paddingRight);
+        + parseFloat(headerStyle.paddingLeft);
+      const rightNeed = parseFloat(headerStyle.paddingRight) + right.offsetWidth;
+      const required = leftNeed + parseFloat(headerStyle.columnGap) + rightNeed;
       if (closed) details.open = false;
       content.style.display = display;
       content.style.visibility = visibility;
-      const compact = required > header.clientWidth;
+      // Title pill: same inset on both sides = widest real cluster (+8px gap), so it
+      // is truly centered and never under a control. Expand the tools only if the
+      // pill still keeps >= 200px (the container-query hide threshold) with them.
+      header.style.setProperty(
+        "--topbar-side",
+        `${Math.ceil(Math.max(tools.offsetLeft + tools.offsetWidth, header.clientWidth - right.offsetLeft)) + 8}px`,
+      );
+      const titleFits = header.querySelector(".shell-topbar-center") === null
+        || 2 * Math.max(leftNeed, rightNeed) + 216 <= header.clientWidth;
+      const compact = required > header.clientWidth || !titleFits;
       if (compact && details.dataset.compact !== "true" && hadControlsFocus) {
         restoreToolsFocusRef.current = true;
       }
@@ -1588,6 +1703,8 @@ export function AppShell() {
     };
     const observer = new ResizeObserver(update);
     observer.observe(header);
+    observer.observe(right);
+    observer.observe(tools);
     observer.observe(content);
     for (const child of content.children) observer.observe(child);
     document.fonts.addEventListener("loadingdone", update);
@@ -1596,7 +1713,7 @@ export function AppShell() {
       observer.disconnect();
       document.fonts.removeEventListener("loadingdone", update);
     };
-  }, [hasGenerationSpeed, isMobile, locale, rightPanelOpen, showChat]);
+  }, [isMobile, locale, settingsTab, showChat]);
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
 
@@ -1647,7 +1764,9 @@ export function AppShell() {
       settingsOpen={Boolean(settingsTab)}
       onOpenSettings={() => setSettingsTab((prev) => prev ? null : "general")}
       onOpenArchive={() => setArchiveBrowserOpen(true)}
+      navigation={sidebarNavigation}
       updateAvailable={Boolean(appUpdate?.updateAvailable) || ompUpdateAvailable}
+      onClose={isMobile ? handleSidebarToggle : undefined}
     />
   );
 
@@ -1755,13 +1874,8 @@ export function AppShell() {
         }
       }
       @media (max-width: 640px) {
-        .sidebar-overlay-backdrop.sidebar-mobile-pending {
-          opacity: 0 !important;
-          pointer-events: none !important;
-        }
         .sidebar-container.sidebar-mobile-pending.sidebar-open {
           transform: translateX(-100%);
-          box-shadow: none;
         }
       }
     `}
@@ -1771,21 +1885,6 @@ export function AppShell() {
       {/* Left sidebar: hidden on full-page Settings */}
       {!settingsTab && (
         <>
-      {/* Mobile overlay backdrop */}
-      <div
-        className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
-        onClick={() => setSidebarOpen(false)}
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 199,
-          background: "color-mix(in srgb, var(--text) 28%, transparent)",
-          opacity: sidebarOpen ? 1 : 0,
-          pointerEvents: sidebarOpen ? "auto" : "none",
-          transition: "opacity var(--dur-slow) var(--ease-out-warm)",
-        }}
-      />
-
       <nav
         id="workspace-sidebar"
         role={isMobile ? "dialog" : undefined}
@@ -1798,7 +1897,7 @@ export function AppShell() {
         inert={mobileSidebarReady && (!sidebarOpen || rightPanelIsModal) ? true : undefined}
         style={{
           background: "var(--bg-panel)",
-          borderRight: "1px solid var(--border)",
+          borderRight: isMobile ? "none" : "1px solid var(--border)",
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
@@ -1876,9 +1975,9 @@ export function AppShell() {
           alignItems: "center",
           flexShrink: 0,
           borderBottom: "1px solid var(--border)",
-          minHeight: isMobile ? "calc(44px + env(safe-area-inset-top))" : 36,
+          minHeight: "var(--shell-topbar-height)",
           background: "var(--bg-panel)",
-          padding: isMobile ? "env(safe-area-inset-top) 4px 0" : "0 8px",
+          padding: isMobile ? "env(safe-area-inset-top, 0px) max(4px, env(safe-area-inset-right, 0px)) 0 max(4px, env(safe-area-inset-left, 0px))" : "0 8px",
           gap: "0 8px",
           minWidth: 0,
         }}>
@@ -2067,7 +2166,8 @@ export function AppShell() {
                     color: "var(--text-muted)",
                     whiteSpace: "nowrap",
                     minWidth: 0,
-                    maxWidth: "min(400px, 30vw)",
+                    width: "fit-content",
+                    justifyContent: "center",
                     flexShrink: 1,
                   }}
                 >
@@ -2147,26 +2247,30 @@ export function AppShell() {
             );
           })()}
 
-          {/* Right Zone: Segmented metric pills (Provider limits, Session Stats/Usage, Speed) */}
+          {/* Right zone: speed, mobile session information, and the file-panel opener. */}
           <div
             data-topbar-right-group
             style={{
               marginLeft: "auto",
               display: "flex",
               alignItems: "center",
-              justifyContent: "flex-end",
-              gap: 6,
-              paddingRight: rightPanelOpen ? 8 : 44,
-              minWidth: hasGenerationSpeed ? "calc(10ch + 33px)" : 0,
-              width: hasGenerationSpeed ? 200 : 0,
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              containerType: "inline-size",
-              containerName: "topbar-speed",
+              gap: isMobile ? 2 : 6,
+              height: isMobile ? 43 : "calc(var(--shell-topbar-height) - 1px)",
               flexShrink: 1,
+              minWidth: 0,
             }}
           >
-
+            {hasGenerationSpeed && <div
+              className="shell-topbar-metrics"
+              style={{
+                flex: "0 1 calc(10ch + 33px)",
+                minWidth: 0,
+                fontSize: 11,
+                fontFamily: "var(--font-mono)",
+                containerType: "inline-size",
+                containerName: "topbar-speed",
+              }}
+            >
             {/* Generation speed pill */}
             {showChat && (() => {
               if (!speed || rate == null) return null;
@@ -2212,6 +2316,26 @@ export function AppShell() {
                 </div>
               );
             })()}
+            </div>}
+            {isMobile && showChat && (
+              <div
+                ref={setSessionInfoContainer}
+                className="shell-session-info"
+                style={{ display: "flex", height: 44, flexShrink: 0, alignSelf: "flex-start" }}
+              />
+            )}
+            <button
+              type="button"
+              className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
+              onClick={() => setRightPanelOpen((open) => !open)}
+              aria-expanded={rightPanelOpen}
+              aria-controls="workspace-file-panel"
+              aria-pressed={rightPanelOpen}
+              title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+              aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+            >
+              <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />
+            </button>
           </div>
 
         </div>
@@ -2282,6 +2406,7 @@ export function AppShell() {
               onSystemPromptLoaderChange={handleSystemPromptLoaderChange}
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
+              sessionInfoContainer={sessionInfoContainer}
               onGenerationSpeedChange={handleGenerationSpeedChange}
               onOpenProviders={() => setSettingsTab("providers")}
               toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
@@ -2354,7 +2479,7 @@ export function AppShell() {
         <div
           className="right-panel-backdrop"
           aria-hidden="true"
-          onClick={() => setRightPanelOpen(false)}
+          onClick={closeRightPanel}
         />
       )}
       {!settingsTab && rightPanelHasOpened && (
@@ -2364,6 +2489,7 @@ export function AppShell() {
         rightView={rightView}
         onSelectView={handleSelectRightView}
         rightPanelOpen={rightPanelOpen}
+        onClose={closeRightPanel}
         rightPanelWidth={rightPanelWidth}
         rightPanelResizing={rightPanelResizing}
         rightPanelRef={attachRightPanel}
@@ -2405,25 +2531,6 @@ export function AppShell() {
       )}
 
     </div>
-    {!settingsTab && (
-      <button
-        type="button"
-        className="shell-toolbar-btn shell-panel-toggle ui-focus-ring"
-        onClick={() => setRightPanelOpen((v) => !v)}
-        aria-expanded={rightPanelOpen}
-        aria-controls="workspace-file-panel"
-        aria-pressed={rightPanelOpen}
-        title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-        aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-        style={{
-          position: "fixed", top: "env(safe-area-inset-top, 0px)", right: "env(safe-area-inset-right, 0px)", zIndex: 300,
-          width: isMobile ? 44 : 36, height: isMobile ? 44 : 36, padding: 0,
-          borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
-        }}
-      >
-        {rightPanelOpen ? <X size={16} strokeWidth={1.8} aria-hidden="true" /> : <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />}
-      </button>
-    )}
     <AppUpdateDialog open={appUpdateDialogOpen} update={appUpdate} phase={appUpdatePhase} visibleStage={appUpdateVisibleStage} error={appUpdateError} onProceed={() => void proceedWithAppUpdate()} onNotNow={dismissAppUpdate} />
     {archiveBrowserOpen && (
       <ArchiveBrowser
