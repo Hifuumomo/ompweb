@@ -1250,14 +1250,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (sendSideQuestion(msg, overrideText)) return;
     const images = attachedImagesRef.current.length ? attachedImagesRef.current : undefined;
-    // The queue callbacks resolve false when omp refused the message; they
-    // restore its text, and the images go back to this draft.
+    // The queue callbacks resolve false when omp refused the message: it goes
+    // back, text and images together, to the draft it was sent from, even if
+    // the user has typed or switched sessions since.
     const key = draftKeyRef.current;
     const keptImages = images?.map(imageToDraftImage);
-    const restoreImagesOnFailure = (queued: Promise<boolean> | undefined) => {
-      if (!keptImages || !key) return;
+    const recoverOnFailure = (queued: Promise<boolean>, text: string) => {
       void Promise.resolve(queued).then((ok) => {
-        if (ok === false) recoverDraft(key, { text: "", images: keptImages });
+        if (ok === false && key) recoverDraft(key, { text, images: keptImages });
       });
     };
     const files = attachedTextFilesRef.current;
@@ -1279,7 +1279,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       if (expansion.kind === "expand") {
         const prompt = composeMessageWithTextAttachments(expansion.prompt, files);
         if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
-        restoreImagesOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images));
+        recoverOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images), prompt);
         clearInput();
         return;
       }
@@ -1292,16 +1292,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       }
       const prompt = composeMessageWithTextAttachments(msg, files);
       if (rejectsOversizedPrompt(prompt, attachedImagesRef.current)) return;
-      restoreImagesOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images));
+      recoverOnFailure(onPromptWithStreamingBehavior(prompt, streamingBehavior, images), prompt);
       clearInput();
       return;
     }
     const composedMessage = composeMessageWithTextAttachments(msg, files);
     if (rejectsOversizedPrompt(composedMessage, attachedImagesRef.current)) return;
     if (mode === "steer" && onSteer) {
-      restoreImagesOnFailure(onSteer(composedMessage, images));
+      recoverOnFailure(onSteer(composedMessage, images), composedMessage);
     } else if (mode === "followup" && onFollowUp) {
-      restoreImagesOnFailure(onFollowUp(composedMessage, images));
+      recoverOnFailure(onFollowUp(composedMessage, images), composedMessage);
     }
     clearInput();
   }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt, sendSideQuestion]);

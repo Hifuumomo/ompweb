@@ -3455,10 +3455,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to steer:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      opts.chatInputRef?.current?.insertIfEmpty(message);
       return false;
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice]);
 
   const handlePromptWithStreamingBehavior = useCallback(async (
     message: string,
@@ -3479,10 +3478,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to queue prompt:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      opts.chatInputRef?.current?.insertIfEmpty(message);
       return false;
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
@@ -3498,10 +3496,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to follow up:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      opts.chatInputRef?.current?.insertIfEmpty(message);
       return false;
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;

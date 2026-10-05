@@ -116,9 +116,14 @@ test("a queued web slash command is expanded and keeps the attachments", async (
   assertQueuedWithAttachments(calls[0], expandWebSlashCommand("/goal ship it").prompt);
 });
 
-test("a refused follow-up gives its images back to the composer", async () => {
-  const calls = await renderRunningWithAttachments({ queued: false });
+test("a refused follow-up goes back whole to its draft, ahead of what was typed meanwhile", async () => {
+  let refuse;
+  const calls = await renderRunningWithAttachments({ queued: new Promise((resolve) => { refuse = () => resolve(false); }) });
   fireEvent.click(screen.getByRole("button", { name: /queue/i }));
   await waitFor(() => assert.equal(calls.length, 1));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "typed meanwhile" } });
+  await act(async () => { refuse(); });
   await waitFor(() => assert.deepEqual(getDraft(KEY)?.images, [{ data: PNG, mimeType: "image/png" }]));
+  assert.equal(getDraft(KEY)?.value, `${calls[0].message}\n\ntyped meanwhile`, "the text, file contents included, comes back too");
+  assert.equal(screen.getByRole("textbox").value, `${calls[0].message}\n\ntyped meanwhile`);
 });
