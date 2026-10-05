@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useSidebarHistory } from "@/hooks/useSidebarHistory";
 import { useModalDialog } from "@/hooks/useModalDialog";
+import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
 import { toast } from "./ui/toast";
@@ -996,6 +997,13 @@ export function AppShell() {
     rightPanelRef.current = element;
     setRightPanelMounted(element !== null);
   }, [rightPanelRef]);
+  useMobileSidebarGestures({
+    enabled: isMobile && mobileSidebarReady && !settingsTab,
+    leftOpen: sidebarOpen,
+    rightOpen: rightPanelOpen,
+    onLeftOpenChange: setSidebarOpen,
+    onRightOpenChange: setRightPanelOpen,
+  });
   const pendingRightPanelWidthRef = useRef<number | null>(null);
   const rightResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
   useEffect(() => {
@@ -2063,7 +2071,7 @@ export function AppShell() {
                     color: "var(--text-muted)",
                     whiteSpace: "nowrap",
                     minWidth: 0,
-                    width: "100%",
+                    width: "fit-content",
                     justifyContent: "center",
                     flexShrink: 1,
                   }}

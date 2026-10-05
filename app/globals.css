@@ -3427,11 +3427,9 @@ html[data-touch-targets="accessible"] .right-panel-toolbar {
   position: absolute;
   top: 0;
   bottom: 0;
-  /* Equal insets center the pill; max-width + auto margins keep it centered. */
+  /* Equal insets center the content-sized pill between the control clusters. */
   left: var(--topbar-side);
   right: var(--topbar-side);
-  max-width: 560px;
-  margin-inline: auto;
   pointer-events: none;
 }
 .shell-topbar-center > .shell-topbar-breadcrumb {
@@ -4179,6 +4177,11 @@ html[data-touch-targets="accessible"] .right-panel-toolbar {
     padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
     overflow: hidden;
     transition: transform var(--dur-slow) var(--ease-out-warm), visibility 0s;
+  }
+  /* Frame documents cannot bubble touches: keep the closing edge in the parent. */
+  .right-panel-container iframe {
+    margin-left: 24px;
+    max-width: calc(100% - 24px);
   }
   .right-panel-toolbar {
     padding-top: env(safe-area-inset-top, 0px);
