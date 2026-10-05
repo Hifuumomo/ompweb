@@ -363,7 +363,12 @@ test("the queue panel shows omp's snapshot on load and follows queue_update, not
 
 test("queued cancellation reports omp's answer and leaves the chip to the snapshot", async (t) => {
   for (const outcome of [
-    { name: "removed", response: { value: { success: true, data: { removed: true } } }, result: true, notices: [] },
+    {
+      name: "removed",
+      response: { value: { success: true, data: { removed: true, images: [{ type: "image", data: "AAAA", mimeType: "image/png" }, { bogus: true }] } } },
+      result: [{ data: "AAAA", mimeType: "image/png" }],
+      notices: [],
+    },
     { name: "not pending", response: { value: { success: true, data: { removed: false } } }, result: false, notices: ["warning"] },
     { name: "unsupported", response: { status: 400, value: { error: "Unknown RPC command: remove_queued_message" } }, result: false, notices: ["error"] },
   ]) {
@@ -390,7 +395,7 @@ test("queued cancellation reports omp's answer and leaves the chip to the snapsh
       ]);
       await act(async () => {
         release(outcome.response);
-        assert.equal(await first, outcome.result);
+        assert.deepEqual(await first, outcome.result);
       });
       assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target", "target"] });
       assert.deepEqual(w.latest.notices.map((n) => n.type), outcome.notices);
@@ -581,7 +586,7 @@ test("a cancellation omp confirms after unmount still reports success so Edit ca
   await act(async () => { cancellation = w.latest.removeQueuedMessage("target", "followUp"); });
   w.unmount();
   release({ value: { success: true, data: { removed: true } } });
-  assert.equal(await cancellation, true);
+  assert.deepEqual(await cancellation, [], "an omp that returns no images still confirms the removal");
 });
 
 test("a Stop whose run ended during the withdrawal does not abort the next prompt", async () => {
@@ -3190,8 +3195,11 @@ test("Stop takes queued input back through omp in one step, including a steer th
   primeSession("abort-atomic", [userMsg("u0", "loaded question")]);
   const { w } = await startRun("abort-atomic", "hello agent");
   world.abortRestoreQueue = {
-    steering: [{ text: "steer the snapshot missed" }],
-    followUp: [{ text: "later follow-up", images: [{ type: "image", data: "x", mimeType: "image/png" }] }],
+    steering: [{ text: "steer the snapshot missed" }, { text: "[Image]" }],
+    followUp: [
+      { text: "later follow-up", images: [{ type: "image", data: "x", mimeType: "image/png" }] },
+      { text: "[Image]", images: [{ type: "image", data: "y", mimeType: "image/webp" }] },
+    ],
   };
 
   await act(async () => { await w.latest.handleAbort(); });
@@ -3200,7 +3208,8 @@ test("Stop takes queued input back through omp in one step, including a steer th
   assert.equal(commands.filter((type) => type === "abort_and_restore_queue").length, 1);
   assert.equal(commands.includes("abort"), false, "omp's own abort already stopped the run");
   assert.equal(commands.includes("remove_queued_message"), false);
-  assert.equal(getDraft("abort-atomic")?.value, "steer the snapshot missed\n\nlater follow-up");
+  assert.equal(getDraft("abort-atomic")?.value, "steer the snapshot missed\n\n[Image]\n\nlater follow-up", "only an image-only message's label is dropped");
+  assert.deepEqual(getDraft("abort-atomic")?.images, [{ data: "x", mimeType: "image/png" }, { data: "y", mimeType: "image/webp" }]);
   assert.deepEqual(w.latest.notices, []);
   clearDraft("abort-atomic");
 });

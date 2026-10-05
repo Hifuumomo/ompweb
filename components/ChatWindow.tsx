@@ -837,9 +837,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
 
 
   const onDrop = useCallback((files: File[]) => {
-    if (sessionBusy) return;
     chatInputRef?.current?.addFiles(files);
-  }, [sessionBusy, chatInputRef]);
+  }, [chatInputRef]);
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
 
@@ -1143,7 +1142,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {isDragOver && !sessionBusy && (
+      {isDragOver && (
         <div className="drop-zone-overlay pointer-events-none absolute inset-0 z-50 flex items-center justify-center backdrop-blur-[1px]">
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             {[0, 0.8, 1.6].map((delay) => (

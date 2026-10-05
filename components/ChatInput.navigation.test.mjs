@@ -87,6 +87,9 @@ test("attachment-only drafts stay protected across live draft-key changes and re
   assert.equal(warnsOnExit(), false);
 });
 
+// The removed message's images, as omp returns them with `removed: true`.
+const QUEUED_IMAGES = [{ data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", mimeType: "image/png" }];
+
 for (const navigation of ["draft-key change", "unmount"]) {
   test(`queued Edit recovers the old draft after ${navigation} while cancellation is pending`, async () => {
     const oldKey = `edit-old-${navigation}`;
@@ -118,13 +121,14 @@ for (const navigation of ["draft-key change", "unmount"]) {
       }
       fireEvent.change(screen.getByRole("textbox"), { target: { value: "new session draft" } });
       await act(async () => {
-        release(true);
+        release(QUEUED_IMAGES);
         await cancellation;
       });
       assert.equal(screen.getByRole("textbox").value, "new session draft");
       assert.equal(getDraft(newKey).value, "new session draft");
       assert.equal(getDraft(oldKey).value, "queued question\n\ndraft updated while waiting");
       assert.deepEqual(getDraft(oldKey).files, originalFiles);
+      assert.deepEqual(getDraft(oldKey).images, QUEUED_IMAGES, "the queued message's images come back with its text");
 
       if (navigation === "unmount") {
         view.unmount();
@@ -167,13 +171,14 @@ for (const navigation of ["original composer", "same-key remount"]) {
       await act(async () => {
         fireEvent.change(screen.getByRole("textbox"), { target: { value: "typed while waiting" } });
         ref.current.insertText("and queued insertion");
-        release(true);
+        release(QUEUED_IMAGES);
         await cancellation;
       });
       const recovered = "queued question\n\ntyped while waiting and queued insertion";
       assert.equal(screen.getByRole("textbox").value, recovered);
       assert.equal(getDraft(draftKey).value, recovered);
       assert.deepEqual(getDraft(draftKey).files, originalFiles);
+      assert.deepEqual(getDraft(draftKey).images, QUEUED_IMAGES, "the queued message's images come back with its text");
 
       fireEvent.change(screen.getByRole("textbox"), { target: { value: `${recovered}\nnext user edit` } });
       assert.equal(screen.getByRole("textbox").value, `${recovered}\nnext user edit`);
