@@ -2345,9 +2345,7 @@ span.token.table {
   text-transform: uppercase;
 }
 .picker-group-label + .picker-row { margin-top: 0; }
-/* Reasoning levels share the model rows' look: same menu, same row style. */
-.picker-row,
-.picker-thinking-card {
+.picker-row {
   display: flex;
   align-items: center;
   width: 100%;
@@ -2365,15 +2363,12 @@ span.token.table {
   transition: background-color var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm);
 }
 .picker-row:hover,
-.picker-row:focus-visible,
-.picker-thinking-card:hover,
-.picker-thinking-card:focus-visible {
+.picker-row:focus-visible {
   color: var(--text);
   background: var(--bg-hover);
   outline: none;
 }
-.picker-row[data-active="true"],
-.picker-thinking-card[data-active="true"] {
+.picker-row[data-active="true"] {
   color: var(--text);
   font-weight: 600;
   background: var(--bg-selected);

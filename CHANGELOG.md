@@ -28,7 +28,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
-- The Provider Usage panel now shows each account's email instead of omp's redacted form (`an*`). Only the account label, plan and limits reach the browser.
+- The Provider Usage panel now shows each account's email instead of omp's redacted form (`an*`); accounts without an email show as **Account N**. Only the email, plan and limits reach the browser.
 - The composer's reasoning menu now uses the same borderless rows as the model picker instead of bordered cards.
 - The context popover now uses the room above the composer instead of a fixed 380px cap, so it only scrolls when the window is too short for it.
 - Fix settings crashes, stalled session catch-up, and failed voice transcription polling in browsers without `AbortSignal.timeout`, `AbortSignal.any`, or `Promise.withResolvers`, including development-mode clients. Client requests now use `AbortController` timers and ordinary promises while retaining timeouts and cancellation (#196).

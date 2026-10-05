@@ -1755,11 +1755,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, [thinkingDropdownOpen]);
   useLayoutEffect(() => {
     const wrap = contextWrapRef.current;
-    if (!contextOpen || !wrap) return;
-    // --ui-scale zooms <html>: the rect is in painted pixels, styles are not.
+    if (!contextOpen || isMobile || !wrap) return;
+    // --ui-scale zooms <html>: rects are in painted pixels, styles are not.
     const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale")) || 1;
-    setContextMaxHeight(Math.max(160, wrap.getBoundingClientRect().top / scale - 16));
-  }, [contextOpen]);
+    const room = wrap.getBoundingClientRect().top - getMenuBoundary(wrap).top;
+    setContextMaxHeight(Math.max(160, room / scale - 16));
+  }, [contextOpen, isMobile]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -3028,7 +3029,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                         const displayLabel = (mappedVal != null && mappedVal !== lvl) ? mappedVal : lvl;
                         return (
                           <button
-                            className="picker-thinking-card"
+                            className="picker-row picker-thinking-card"
                             data-active={isActive}
                             role="menuitemradio"
                             aria-checked={isActive}
