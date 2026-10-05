@@ -1548,6 +1548,7 @@
   "settingsConfig.ttsVoiceDesc": "选择用于文本转语音朗读的浏览器声音。",
   "settingsConfig.defaultVoice": "系统默认声音",
   "messageView.readAloud": "朗读",
+  "messageView.read": "朗读",
   "messageView.stopSpeech": "停止朗读",
   "settingsConfig.ttsNotSupported": "当前浏览器不支持",
   "btw.panelTitle": "旁支问题",

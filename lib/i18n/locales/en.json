@@ -1585,6 +1585,7 @@
   "settingsConfig.ttsVoiceDesc": "Select the browser voice for text-to-speech reading.",
   "settingsConfig.defaultVoice": "Default system voice",
   "messageView.readAloud": "Read aloud",
+  "messageView.read": "Read",
   "messageView.stopSpeech": "Stop speaking",
   "settingsConfig.ttsNotSupported": "Not supported in this browser",
   "btw.panelTitle": "Side question",
