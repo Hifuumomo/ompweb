@@ -11,6 +11,7 @@ import {
 import { toast } from "@/components/ui/toast";
 import { Plus } from "lucide-react";
 import { SettingsTabs, type SettingsTab } from "./SettingsTabs";
+import { SkillDiagnosticsInspector } from "./SkillDiagnostics";
 import type {
   SkillInfo as Skill,
   SkillInstallScope,
@@ -728,11 +729,13 @@ export function SkillsConfig({
   onClose,
   onSelectTab,
   embedded = false,
+  sessionId,
 }: {
   cwd: string;
   onClose: () => void;
   onSelectTab?: (tab: SettingsTab) => void;
   embedded?: boolean;
+  sessionId?: string | null;
 }) {
   const isMobile = useIsMobile();
   const { t, tn } = useI18n();
@@ -957,6 +960,9 @@ export function SkillsConfig({
           </button>
         </div>)}
         {!embedded && onSelectTab && <SettingsTabs active="skills" onSelect={onSelectTab} />}
+        <div className="grid gap-1 border-b border-border px-3 py-2">
+          <SkillDiagnosticsInspector sessionId={sessionId} />
+        </div>
 
         {/* Body */}
         <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", overflow: "hidden" }}>
