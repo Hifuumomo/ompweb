@@ -39,9 +39,9 @@ export function useMobileSidebarGestures({ enabled, leftOpen, rightOpen, onLeftO
         direction = fromLeft ? 1 : -1;
         open = true;
       } else return;
-      // A nested dialog or its backdrop must not open/close the drawer behind it.
+      // Dialogs and composer popovers must stay above the drawer behind them.
       const owner = rightOpen ? "workspace-file-panel" : leftOpen ? "workspace-sidebar" : null;
-      for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], dialog[open]')) {
+      for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], dialog[open]')) {
         if (dialog.id === owner || dialog.closest('[inert], [hidden], [aria-hidden="true"]')) continue;
         const style = getComputedStyle(dialog);
         if (style.display !== "none" && style.visibility !== "hidden") return;
