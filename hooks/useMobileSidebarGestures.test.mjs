@@ -168,3 +168,21 @@ test("composer menus and pickers block drawer gestures until dismissed", () => {
   swipe(14, 100);
   assert.equal(hook.result.current.leftOpen, true);
 });
+
+test("the drawer's persistent Git list allows closing while a nested popup still blocks it", () => {
+  const hook = mount({ rightOpen: true });
+  const drawer = document.createElement("div");
+  drawer.id = "workspace-file-panel";
+  drawer.setAttribute("role", "dialog");
+  const files = document.createElement("div");
+  files.setAttribute("role", "listbox");
+  const popup = document.createElement("div");
+  popup.setAttribute("role", "menu");
+  drawer.append(files, popup);
+  document.body.append(drawer);
+  assert.equal(swipe(14, 100, { target: files }).move.defaultPrevented, false);
+  assert.equal(hook.result.current.rightOpen, true);
+  popup.remove();
+  assert.equal(swipe(14, 100, { target: files }).move.defaultPrevented, true);
+  assert.equal(hook.result.current.rightOpen, false);
+});

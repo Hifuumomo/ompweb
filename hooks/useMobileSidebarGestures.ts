@@ -41,8 +41,11 @@ export function useMobileSidebarGestures({ enabled, leftOpen, rightOpen, onLeftO
       } else return;
       // Dialogs and composer popovers must stay above the drawer behind them.
       const owner = rightOpen ? "workspace-file-panel" : leftOpen ? "workspace-sidebar" : null;
+      const ownerElement = owner ? document.getElementById(owner) : null;
       for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], dialog[open]')) {
         if (dialog.id === owner || dialog.closest('[inert], [hidden], [aria-hidden="true"]')) continue;
+        // Persistent file collections belong to the drawer, not to a popup over it.
+        if (dialog.getAttribute("role") === "listbox" && ownerElement?.contains(dialog)) continue;
         const style = getComputedStyle(dialog);
         if (style.display !== "none" && style.visibility !== "hidden") return;
       }
