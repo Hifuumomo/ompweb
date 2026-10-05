@@ -35,6 +35,21 @@ Queue **Delete** and **Edit** additionally require `remove_queued_message`. Dele
 
 The queue panel shows omp's own queue (`queuedMessages` in `get_state` and `queue_update` events, omp 18.4.4 or later), so every device viewing a session sees the same queued messages. **Stop** moves the text of messages still waiting in the queue back into the composer instead of letting the agent run them; a steer the model already picked up through live steering still runs. Older omp runtimes show no queue panel, and Stop cannot take queued messages back.
 
+## App installation behind authentication
+
+To install the web app, sign in first and use your browser's installation menu.
+The single manifest link requests `/api/manifest` with credentials; that endpoint
+uses the existing web-password guard and private, revalidating caching. Its
+192×192 and 512×512 PNG icons are embedded from the packaged assets because
+Android's native installer fetches ordinary icon URLs without authentication
+cookies. The app still launches at `/` with scope `/`.
+
+Keep Cloudflare Access and application authentication enabled; no public
+manifest exception or Access bypass rule is needed. This does not add offline
+support. Local Chromium verification covered cookie-gated metadata with HTTP
+icon URLs blocked (zero installability errors). The owner also confirmed that
+installation on a physical phone works as expected behind Cloudflare Access.
+
 ## Quick Start
 
 **Run directly without installing:**

@@ -26,7 +26,7 @@ export function proxy(request: NextRequest) {
 }
 
 // The sign-in screen still needs its Next.js JavaScript and CSS before a
-// session exists; these are public build assets, not workspace data. The
-// same goes for the web app manifest and its icons: browsers fetch them
-// without cookies, and a login redirect there breaks PWA installation.
-export const config = { matcher: "/((?!_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|icon\\.svg|icon\\.png|icon-192\\.png).*)" };
+// session exists; these and the ordinary browser icons are public assets,
+// not workspace data. /api/manifest stays authenticated: its link includes
+// credentials and its embedded installation icons need no separate request.
+export const config = { matcher: "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|icon\\.png|icon-192\\.png).*)" };
