@@ -2966,6 +2966,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </div>
             )}
 
+            <div className="composer-toolbar-spacer" style={{ marginLeft: "auto" }} />
+
             {/* Thinking selector — compact, expressive, and consistent with models */}
             {onThinkingLevelChange && (
               <div ref={thinkingDropdownRef} className="composer-thinking-control" style={{ position: "relative", minWidth: 0 }}>
@@ -3131,8 +3133,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 {usageLimitLabel}
               </div>
             )}
-
-            <div className="composer-toolbar-spacer" style={{ marginLeft: "auto" }} />
 
             {/* Advisor activity — thunder while the advisor model reviews this run */}
             {advisorActive && (

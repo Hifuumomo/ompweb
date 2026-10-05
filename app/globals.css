@@ -1940,6 +1940,7 @@ pre, code {
 }
 .composer-toolbar {
   container-type: inline-size;
+  justify-content: flex-end;
 }
 .composer-toolbar > button {
   flex-shrink: 0;
@@ -2152,8 +2153,6 @@ pre, code {
     display: none;
   }
   .composer-toolbar { flex-wrap: wrap !important; row-gap: 6px; }
-  .composer-toolbar-spacer { display: none; }
-  .composer-primary-action { margin-left: auto; }
   /* Own row above the controls, so it never squeezes the model picker. */
   .composer-usage-limit-badge { order: -1; flex-basis: 100%; max-width: none; }
 
