@@ -3403,15 +3403,24 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 .shell-toolbar-btn:active:not(:disabled) {
   transform: scale(0.96);
 }
-.shell-panel-toggle {
-  border-radius: 0 !important;
-  background: var(--bg-panel);
-  color: var(--text-muted);
+.right-panel-toolbar {
+  --right-panel-close-width: 36px;
+  position: relative;
+  padding-right: var(--right-panel-close-width);
 }
-.shell-panel-toggle:hover:not(:disabled),
-.shell-panel-toggle[aria-pressed="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
+html:root .shell-toolbar-btn.right-panel-close-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--right-panel-close-width) !important;
+  height: var(--shell-topbar-height) !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border-radius: 0;
+}
+html[data-touch-targets="accessible"] .right-panel-toolbar {
+  --right-panel-close-width: 44px;
 }
 /* Subtle group separator between toolbar control clusters */
 .shell-toolbar-divider {
@@ -3429,6 +3438,13 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   .shell-toolbar-btn {
     width: 40px;
     height: 40px;
+  }
+  .right-panel-toolbar {
+    --right-panel-close-width: 44px;
+  }
+  html:root .shell-toolbar-btn.right-panel-close-button {
+    padding-top: env(safe-area-inset-top, 0px) !important;
+    border-bottom: 1px solid var(--border);
   }
   .shell-toolbar-divider {
     margin: 0 4px;
@@ -3451,7 +3467,17 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
 }
 
+:root {
+  --shell-topbar-height: 36px;
+}
+@media (min-width: 641px) {
+  html[data-touch-targets="accessible"] {
+    --shell-topbar-height: 44px;
+  }
+}
 .shell-topbar {
+  /* Fallback until AppShell measures the real clusters. */
+  --topbar-side: 260px;
   display: flex;
   flex-wrap: nowrap;
   justify-content: space-between;
@@ -3470,10 +3496,11 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 }
 .shell-topbar-center {
   position: absolute;
-  top: 4.5px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: clamp(0px, calc(100% - 520px), 400px);
+  top: 0;
+  bottom: 0;
+  /* Equal insets center the content-sized pill between the control clusters. */
+  left: var(--topbar-side);
+  right: var(--topbar-side);
   pointer-events: none;
 }
 .shell-topbar-center > .shell-topbar-breadcrumb {
@@ -3487,42 +3514,23 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
 }
 
-@media (min-width: 641px) and (max-width: 960px) {
-  .shell-topbar-center {
-    display: flex !important;
-    width: min(260px, 28vw);
-  }
-  .shell-topbar-center > .shell-topbar-breadcrumb {
-    max-width: 100%;
-  }
-}
-
 @media (max-width: 640px) {
-  .shell-topbar-center {
-    display: flex !important;
-    position: static;
-    inset: auto;
-    width: auto;
-    max-width: none;
-    min-width: 0;
-    flex: 1 1 auto;
-    justify-content: flex-start;
-    overflow: hidden;
-    transform: none;
+  :root {
+    --shell-topbar-height: calc(44px + env(safe-area-inset-top, 0px));
   }
-  .shell-topbar-center .shell-topbar-breadcrumb {
-    width: auto;
-    max-width: min(320px, 100%);
+  .shell-topbar {
+    --topbar-side: max(96px, calc(92px + env(safe-area-inset-right, 0px)));
+  }
+  .shell-topbar-center {
+    top: env(safe-area-inset-top, 0px);
   }
   .shell-topbar-center .shell-topbar-breadcrumb {
     visibility: visible;
   }
-
 }
 @media (max-width: 640px) {
   .shell-topbar {
     gap: 0 4px !important;
-    padding-right: 48px !important;
   }
   .shell-topbar-overflow-content {
     overflow-x: auto;
@@ -3541,20 +3549,13 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   .shell-topbar .shell-toolbar-divider {
     margin: 0;
   }
-  .shell-topbar [data-topbar-right-group] {
-    width: 0 !important;
-    min-width: 0 !important;
-    padding: 0 !important;
-  }
-  .shell-topbar-center {
-    margin: 0 4px;
-    justify-content: center;
+  .shell-topbar-metrics {
+    display: none;
   }
   .shell-topbar-project-context {
     display: none !important;
   }
   .shell-topbar-center .shell-topbar-breadcrumb {
-    max-width: 100%;
     height: 32px;
     padding-inline: 4px;
     border-color: transparent;
@@ -3615,7 +3616,7 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: min(440px, 32vw);
+  max-width: 100%;
   height: 26px;
   padding: 0 8px;
   border-radius: var(--radius-control);
@@ -4135,9 +4136,6 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 
 /* Desktop sidebar: animate width */
 @media (min-width: 641px) {
-  .sidebar-overlay-backdrop {
-    display: none !important;
-  }
   .sidebar-container {
     position: relative;
     overflow: hidden;
@@ -4197,7 +4195,7 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
   .right-panel-container.right-panel-open {
     position: fixed;
-    top: 36px;
+    top: var(--shell-topbar-height);
     right: 0;
     bottom: 0;
     width: min(360px, 55vw);
@@ -4228,20 +4226,16 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
   .sidebar-container {
     position: fixed !important;
-    top: env(safe-area-inset-top, 0px);
-    left: 0;
-    bottom: 0;
-    width: 280px;
-    max-width: 85vw;
-    transition: transform var(--dur-slow) var(--ease-out-warm), box-shadow var(--dur-slow) var(--ease-out-warm);
+    inset: 0;
+    /* Full-screen drawer: safe-area padding (the list adds its own bottom). */
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+    transition: transform var(--dur-slow) var(--ease-out-warm);
   }
   .sidebar-container.sidebar-open {
     transform: translateX(0);
-    box-shadow: var(--shadow-modal);
   }
   .sidebar-container.sidebar-closed {
     transform: translateX(-100%);
-    box-shadow: none;
   }
 
   /* Full-screen overlay that slides in from the right edge. Closed panels are
@@ -4257,7 +4251,7 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
   .right-panel-toolbar {
     padding-top: env(safe-area-inset-top, 0px);
-    min-height: calc(44px + env(safe-area-inset-top, 0px)) !important;
+    min-height: var(--shell-topbar-height) !important;
   }
   .right-panel-container.right-panel-open {
     transform: none;
@@ -4396,7 +4390,8 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 html[data-touch-targets="accessible"] :is(
   .shell-toolbar-btn,
   .right-panel-toolbar [role="toolbar"] > button,
-  .composer-primary-action
+  .composer-primary-action,
+  .composer-context-control
 ) {
   min-width: 44px;
 }
@@ -4410,6 +4405,7 @@ html[data-touch-targets="accessible"] :is(
   .composer-toolbar > button,
   .composer-toolbar > div > button,
   .composer-primary-action,
+  .composer-context-control,
   .shell-toolbar-btn,
   .sidebar-icon-button,
   .sidebar-project-action,

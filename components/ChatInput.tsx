@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, memo, KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ClipboardPaste, ListChecks, Loader2, Mic, Paperclip, Plus, RotateCw, Shrink, Snail, Sparkles, Wrench, X, Zap } from "lucide-react";
 import { getSubmitDuringRunBehavior, isWordCompletionEnabled } from "@/lib/composer-prefs";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
@@ -193,12 +194,14 @@ interface Props {
   advisorActive?: boolean;
   /** Resolved advisor role (display model + reasoning) for the composer tooltips. */
   advisorModel?: { name: string; reasoning: string | null } | null;
-  /** Compact the session context from the composer toolbar. */
+  /** Compact the session context from the session information panel. */
   onCompact?: () => void;
-  /** Live context totals feeding the composer context ring. */
+  /** Live context totals feeding the session information ring. */
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   /** Session stats shown in the context ring popover. */
   sessionStats?: SessionStatsInfo | null;
+  /** Mobile top-bar mount point for the session information control. */
+  sessionInfoContainer?: HTMLDivElement | null;
   /** Model capacity shown in the context ring popover. */
   modelCapacity?: { contextWindow?: number; maxTokens?: number } | null;
   /** Generation speed shown in the context ring popover. */
@@ -329,6 +332,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   onCompact,
   contextUsage,
   sessionStats,
+  sessionInfoContainer,
   modelCapacity,
   generationSpeed,
   onRemoveQueuedMessage,
@@ -394,6 +398,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   // Desktop context popover height cap: the room above its trigger, so it only
   // scrolls when the window is genuinely too short for it.
   const [contextMaxHeight, setContextMaxHeight] = useState<number>();
+  const [composerContextContainer, setComposerContextContainer] = useState<HTMLDivElement | null>(null);
+  const contextContainer = isMobile ? sessionInfoContainer : composerContextContainer;
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [plusExpanded, setPlusExpanded] = useState<"tools" | "advisor" | null>(null);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
@@ -426,6 +432,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const modelSearchInputRef = useRef<HTMLInputElement>(null);
   const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const contextWrapRef = useRef<HTMLDivElement>(null);
+  const contextReturnFocusRef = useRef<HTMLElement | null>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
@@ -1706,7 +1713,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         saved: formatTokenCount(compactSavedTokens, locale),
       })
     : null;
-  // Composer context ring: live totals, falling back to the session snapshot.
+  // Session information ring: live totals, falling back to the session snapshot.
   const ringCtx = contextUsage ?? sessionStats?.contextUsage ?? null;
   const ringPct = ringCtx?.percent ?? null;
   const ringTone = ringPct !== null && ringPct > 90
@@ -1770,6 +1777,39 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const room = wrap.getBoundingClientRect().top - getMenuBoundary(wrap).top;
     setContextMaxHeight(Math.max(160, room / scale - 16));
   }, [contextOpen, isMobile]);
+  useLayoutEffect(() => {
+    const panel = contextWrapRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+    if (contextOpen && panel) {
+      const active = document.activeElement;
+      contextReturnFocusRef.current ??= active instanceof HTMLElement ? active : null;
+      panel.focus();
+    } else if (!contextOpen) {
+      const previous = contextReturnFocusRef.current;
+      contextReturnFocusRef.current = null;
+      const active = document.activeElement;
+      if (previous?.isConnected && (active === document.body || contextWrapRef.current?.contains(active))) {
+        previous.focus();
+      }
+    }
+  }, [contextOpen, contextContainer]);
+  useEffect(() => {
+    if (!contextOpen) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+      const panel = contextWrapRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+      if (!panel?.getClientRects().length) return;
+      const popup = event.target instanceof Element
+        ? event.target.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
+        : null;
+      if (popup && !contextWrapRef.current?.contains(popup)) return;
+      // Capture Escape before the composer or global shortcut can stop a run.
+      event.preventDefault();
+      event.stopPropagation();
+      setContextOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [contextOpen]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -3158,9 +3198,15 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </span>
             )}
 
-            {/* Context ring: usage gauge opening the session context popover */}
+            {/* Desktop keeps the control in the composer; mobile uses the header mount. */}
             {onCompact && (
-              <div ref={contextWrapRef} style={{ position: "relative", flexShrink: 0 }}>
+              <div ref={setComposerContextContainer} style={{ display: isMobile ? "none" : undefined, flexShrink: 0 }} />
+            )}
+            {onCompact && contextContainer && createPortal(
+              <div
+                ref={contextWrapRef}
+                style={{ position: "relative", flexShrink: 0 }}
+              >
                 <button
                   type="button"
                   onClick={() => setContextOpen((open) => !open)}
@@ -3168,9 +3214,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   aria-label={t("composerContext.title")}
                   aria-expanded={contextOpen}
                   aria-haspopup="dialog"
+                  className="composer-context-control ui-focus-ring"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 28, height: 28, padding: 0,
+                    width: isMobile ? 44 : 28, height: isMobile ? 44 : 28, padding: 0,
                     background: contextOpen ? "var(--bg-hover)" : "none", border: "none",
                     borderRadius: 7,
                     color: isCompacting ? "var(--accent)" : "var(--text-muted)",
@@ -3213,21 +3260,21 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 {contextOpen && (
                   <div
                     role="dialog"
+                    tabIndex={-1}
                     aria-label={t("composerContext.title")}
                     className="picker-panel"
                     style={{
                       position: isMobile ? "fixed" : "absolute",
-                      bottom: isMobile ? 8 : "calc(100% + 8px)",
                       ...(isMobile
-                        ? { left: 8, right: 8 }
-                        : { right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
+                        ? { top: "calc(52px + env(safe-area-inset-top))", left: 8, right: 8 }
+                        : { bottom: "calc(100% + 8px)", right: 0, width: 360, maxWidth: "min(360px, calc(100vw - 32px))" }),
                       background: "var(--bg-panel)",
                       border: "1px solid var(--border)",
                       borderRadius: "var(--radius-card)",
                       boxShadow: "var(--shadow-pop)",
                       zIndex: 60,
                       padding: 12,
-                      maxHeight: isMobile ? "calc(100dvh - 32px)" : contextMaxHeight,
+                      maxHeight: isMobile ? "calc(100dvh - 68px - env(safe-area-inset-top))" : contextMaxHeight,
                       overflowY: "auto",
                     }}
                   >
@@ -3276,7 +3323,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     </button>
                   </div>
                 )}
-              </div>
+              </div>,
+              contextContainer,
             )}
 
             {/* Dictation */}

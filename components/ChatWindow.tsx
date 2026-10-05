@@ -50,6 +50,7 @@ interface Props {
   onSessionForked?: (newSessionId: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
+  sessionInfoContainer?: HTMLDivElement | null;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
   onSystemPromptChange?: (prompt: string | null) => void;
   onSystemPromptLoaderChange?: (loader: (() => Promise<void>) | null) => void;
@@ -490,7 +491,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   );
 });
 
-export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
+export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, sessionInfoContainer, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
   const { t, tn } = useI18n();
   const { playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -1039,6 +1040,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
+      sessionInfoContainer={sessionInfoContainer}
       onSend={handleSend}
       onPredictWord={handlePredictWord}
       onPredictWordFeedback={handlePredictWordFeedback}

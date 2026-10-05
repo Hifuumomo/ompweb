@@ -6,6 +6,7 @@ import {
   ChevronsDownUp,
   Copy,
   Download,
+  FileX,
   Files,
   Folder,
   GitBranch,
@@ -30,6 +31,7 @@ interface Props {
   rightView: RightPanelView;
   onSelectView: (view: RightPanelView) => void;
   rightPanelOpen: boolean;
+  onClose: () => void;
   rightPanelWidth: number | null;
   rightPanelResizing: boolean;
   rightPanelRef: Ref<HTMLDivElement>;
@@ -80,6 +82,7 @@ export const RightPanel = memo(function RightPanel({
   rightView,
   onSelectView,
   rightPanelOpen,
+  onClose,
   rightPanelWidth,
   rightPanelResizing,
   rightPanelRef,
@@ -182,7 +185,7 @@ export const RightPanel = memo(function RightPanel({
         }}
       >
         {/* Right panel toolbar: tabs + editor integrations (chat, path, explorer) */}
-        <div className="right-panel-toolbar" style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", minHeight: isMobile ? 44 : 36, paddingRight: isMobile ? 44 : 36, flexWrap: "wrap" }}>
+        <div className="right-panel-toolbar" style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", minHeight: "var(--shell-topbar-height)", flexWrap: "wrap" }}>
           <div style={{ flex: isMobile ? "1 0 100%" : "1 1 160px", overflow: "hidden", minWidth: 0 }}>
             <TabBar
               tabs={fileTabs}
@@ -322,10 +325,19 @@ export const RightPanel = memo(function RightPanel({
                 onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
               >
-                <X size={13} strokeWidth={2} aria-hidden="true" />
+                <FileX size={13} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
           )}
+          <button
+            type="button"
+            onClick={onClose}
+            title={t("appShell.hideFilePanel")}
+            aria-label={t("appShell.hideFilePanel")}
+            className="shell-toolbar-btn right-panel-close-button ui-focus-ring"
+          >
+            <X size={16} strokeWidth={1.8} aria-hidden="true" />
+          </button>
         </div>
 
         {/* Explorer tab view — kept mounted so expansion survives tab switches. */}

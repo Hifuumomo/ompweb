@@ -12,7 +12,7 @@ import { toast } from "./ui/toast";
 import { clearLastOpenSession, setLastOpenSession, workspaceKeyOf } from "@/lib/workspace-memory";
 import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
-import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import {
   EMPTY_PROJECT_SET,
@@ -81,6 +81,8 @@ interface Props {
   };
   /** True when settings full-page view is currently open. */
   settingsOpen?: boolean;
+  /** Mobile full-screen drawer only: shows a top-left close control. */
+  onClose?: () => void;
 }
 
 
@@ -88,7 +90,7 @@ interface Props {
 
 
 
-export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onWorkspaceOptionsChange, addProjectOpen, setAddProjectOpen, usageVisible = true, onOpenSettings, onOpenArchive, navigation, updateAvailable, settingsOpen = false }: Props) {
+export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onWorkspaceOptionsChange, addProjectOpen, setAddProjectOpen, usageVisible = true, onOpenSettings, onOpenArchive, navigation, updateAvailable, settingsOpen = false, onClose }: Props) {
 
 
   const { t } = useI18n();
@@ -1198,7 +1200,20 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <OmpWebTitle />
+          <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                title={t("appShell.hideSidebar")}
+                aria-label={t("appShell.hideSidebar")}
+                className="shell-toolbar-btn ui-focus-ring"
+              >
+                <X size={16} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            )}
+            <OmpWebTitle />
+          </div>
           <div style={{ display: "flex", gap: 2 }}>
             {navigation && (
               <span className="sidebar-nav-buttons">
