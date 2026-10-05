@@ -2345,7 +2345,9 @@ span.token.table {
   text-transform: uppercase;
 }
 .picker-group-label + .picker-row { margin-top: 0; }
-.picker-row {
+/* Reasoning levels share the model rows' look: same menu, same row style. */
+.picker-row,
+.picker-thinking-card {
   display: flex;
   align-items: center;
   width: 100%;
@@ -2363,12 +2365,15 @@ span.token.table {
   transition: background-color var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm);
 }
 .picker-row:hover,
-.picker-row:focus-visible {
+.picker-row:focus-visible,
+.picker-thinking-card:hover,
+.picker-thinking-card:focus-visible {
   color: var(--text);
   background: var(--bg-hover);
   outline: none;
 }
-.picker-row[data-active="true"] {
+.picker-row[data-active="true"],
+.picker-thinking-card[data-active="true"] {
   color: var(--text);
   font-weight: 600;
   background: var(--bg-selected);
@@ -2395,38 +2400,8 @@ span.token.table {
 .picker-thinking-cards {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  max-height: 280px;
-  padding: 4px;
+  padding: 2px 4px 5px;
   overflow-y: auto;
-}
-.picker-thinking-card {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 27px;
-  gap: 6px;
-  padding: 4px 7px;
-  color: var(--text-muted);
-  text-align: left;
-  cursor: pointer;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  font-size: 12px;
-  transition: background-color var(--dur-fast) var(--ease-out-warm), border-color var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm);
-}
-.picker-thinking-card:hover,
-.picker-thinking-card:focus-visible {
-  color: var(--text);
-  background: var(--bg-hover);
-  outline: none;
-}
-.picker-thinking-card[data-active="true"] {
-  color: var(--text);
-  background: var(--bg-selected);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-  font-weight: 600;
 }
 .picker-panel-footer {
   display: flex;

@@ -389,6 +389,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  // Desktop context popover height cap: the room above its trigger, so it only
+  // scrolls when the window is genuinely too short for it.
+  const [contextMaxHeight, setContextMaxHeight] = useState<number>();
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [plusExpanded, setPlusExpanded] = useState<"tools" | "advisor" | null>(null);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
@@ -1750,6 +1753,13 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!thinkingDropdownOpen) return;
     requestAnimationFrame(() => thinkingDropdownRef.current?.querySelector<HTMLButtonElement>('[role="menuitemradio"]:not([disabled])')?.focus());
   }, [thinkingDropdownOpen]);
+  useLayoutEffect(() => {
+    const wrap = contextWrapRef.current;
+    if (!contextOpen || !wrap) return;
+    // --ui-scale zooms <html>: the rect is in painted pixels, styles are not.
+    const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale")) || 1;
+    setContextMaxHeight(Math.max(160, wrap.getBoundingClientRect().top / scale - 16));
+  }, [contextOpen]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -3209,7 +3219,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                       boxShadow: "var(--shadow-pop)",
                       zIndex: 60,
                       padding: 12,
-                      maxHeight: isMobile ? "calc(100dvh - 32px)" : "min(50vh, 380px)",
+                      maxHeight: isMobile ? "calc(100dvh - 32px)" : contextMaxHeight,
                       overflowY: "auto",
                     }}
                   >

@@ -170,7 +170,9 @@ async function fetchProviderUsage(refresh = false): Promise<string> {
       windowsHide: true,
     });
   }
-  const { stdout } = await execFileAsync(bin, ["usage", "--json", "--redact"], {
+  // Unredacted so accounts show their real email; only the parsed label, plan
+  // and windows reach the browser, never the raw metadata.
+  const { stdout } = await execFileAsync(bin, ["usage", "--json"], {
     timeout: USAGE_TIMEOUT_MS,
     maxBuffer: USAGE_MAX_BUFFER,
     windowsHide: true,
