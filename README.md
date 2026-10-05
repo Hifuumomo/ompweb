@@ -41,7 +41,7 @@ redundant installations appear above the composer when its OMP session starts;
 an empty new-chat page does not start OMP just for diagnostics. **Details** shows
 the resolved default, variants, identical copies, backing paths, sources, and
 selection reason. The **×** button dismisses the notice for that session until
-the diagnostic report changes. **Turn this off** and **Settings →
+the diagnostic report changes. **Turn off** and **Settings →
 Interface & Behavior → Skill startup notices** use OMP's persisted
 `skills.showStartupDiagnostics` preference, not a separate browser setting.
 **Settings → Extensions & Tools → Skills → View skill diagnostics** remains

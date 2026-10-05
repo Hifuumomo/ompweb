@@ -15,7 +15,7 @@
   "skillDiagnostics.clean": "No conflicting skill variants or redundant installations.",
   "skillDiagnostics.noSession": "Select a session to inspect its live skill diagnostics.",
   "skillDiagnostics.unavailable": "Skill diagnostics are unavailable. The session must be running on an OMP version that supports diagnostics RPC.",
-  "skillDiagnostics.disable": "Turn this off",
+  "skillDiagnostics.disable": "Turn off",
   "skillDiagnostics.saving": "Saving…",
   "skillDiagnostics.saveFailed": "Could not change skill startup notices.",
   "skillDiagnostics.overridden": "Startup notices are still enabled for this session.",
