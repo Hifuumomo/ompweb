@@ -3183,7 +3183,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   aria-label={t("composerContext.title")}
                   aria-expanded={contextOpen}
                   aria-haspopup="dialog"
-                  className="ui-focus-ring"
+                  className="composer-context-control ui-focus-ring"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center",
                     width: isMobile ? 44 : 28, height: isMobile ? 44 : 28, padding: 0,

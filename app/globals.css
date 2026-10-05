@@ -3344,7 +3344,7 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 }
 /* Same height as the top bar (token below), no border; the icon centers in the
    content area under the safe inset. Beats the touch-target size overrides. */
-html .shell-toolbar-btn.shell-panel-toggle {
+html:root .shell-toolbar-btn.shell-panel-toggle {
   height: var(--shell-topbar-height) !important;
   min-height: 0 !important;
   padding: 0 0 1px !important;
@@ -3366,7 +3366,7 @@ html .shell-toolbar-btn.shell-panel-toggle {
     width: 40px;
     height: 40px;
   }
-  html .shell-toolbar-btn.shell-panel-toggle {
+  html:root .shell-toolbar-btn.shell-panel-toggle {
     padding-top: env(safe-area-inset-top, 0px) !important;
   }
   .shell-toolbar-divider {
@@ -3392,6 +3392,11 @@ html .shell-toolbar-btn.shell-panel-toggle {
 
 :root {
   --shell-topbar-height: 36px;
+}
+@media (min-width: 641px) {
+  html[data-touch-targets="accessible"] {
+    --shell-topbar-height: 44px;
+  }
 }
 .shell-topbar {
   /* Fallback until AppShell measures the real clusters. */
@@ -4316,7 +4321,8 @@ html .shell-toolbar-btn.shell-panel-toggle {
 html[data-touch-targets="accessible"] :is(
   .shell-toolbar-btn,
   .right-panel-toolbar [role="toolbar"] > button,
-  .composer-primary-action
+  .composer-primary-action,
+  .composer-context-control
 ) {
   min-width: 44px;
 }
@@ -4330,6 +4336,7 @@ html[data-touch-targets="accessible"] :is(
   .composer-toolbar > button,
   .composer-toolbar > div > button,
   .composer-primary-action,
+  .composer-context-control,
   .shell-toolbar-btn,
   .sidebar-icon-button,
   .sidebar-project-action,

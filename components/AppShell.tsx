@@ -1607,7 +1607,7 @@ export function AppShell() {
       observer.disconnect();
       document.fonts.removeEventListener("loadingdone", update);
     };
-  }, [hasGenerationSpeed, isMobile, locale, rightPanelOpen, showChat]);
+  }, [hasGenerationSpeed, isMobile, locale, rightPanelOpen, settingsTab, showChat]);
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
 
@@ -1769,7 +1769,6 @@ export function AppShell() {
       @media (max-width: 640px) {
         .sidebar-container.sidebar-mobile-pending.sidebar-open {
           transform: translateX(-100%);
-          box-shadow: none;
         }
       }
     `}
