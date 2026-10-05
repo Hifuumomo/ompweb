@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 
-const EDGE_WIDTH = 24;
 const SWIPE_DISTANCE = 64;
 const DIRECTION_SLOP = 12;
 
@@ -14,65 +13,75 @@ type Options = {
   onRightOpenChange: (open: boolean) => void;
 };
 
-/** Edge pulls reuse drawer state and motion without taking over vertical scrolling. */
+/** Intentional horizontal swipes reuse drawer state without taking over native gestures. */
 export function useMobileSidebarGestures({ enabled, leftOpen, rightOpen, onLeftOpenChange, onRightOpenChange }: Options) {
   useEffect(() => {
     if (!enabled) return;
-    let gesture: { id: number; x: number; y: number; direction: number; side: "left" | "right"; open: boolean; claimed: boolean } | null = null;
+    let gesture: { id: number; x: number; y: number; target: Element; direction: number; side: "left" | "right" | null; open: boolean } | null = null;
     const cancel = () => { gesture = null; };
-    const start = (event: TouchEvent) => {
-      cancel();
-      if (event.touches.length !== 1 || !(event.target instanceof Element)) return;
-      if (event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), .shell-topbar-overflow[open], [data-top-panel]')) return;
-      const touch = event.touches[0];
-      const fromLeft = touch.clientX <= EDGE_WIDTH;
-      const fromRight = touch.clientX >= window.innerWidth - EDGE_WIDTH;
-      let side: "left" | "right";
-      let direction: number;
-      let open: boolean;
-      if (rightOpen && fromLeft) {
-        side = "right"; direction = 1; open = false;
-      } else if (!rightOpen && leftOpen && fromRight) {
-        side = "left"; direction = -1; open = false;
-      } else if (!leftOpen && !rightOpen && (fromLeft || fromRight)) {
-        side = fromLeft ? "left" : "right";
-        direction = fromLeft ? 1 : -1;
-        open = true;
-      } else return;
-      // Dialogs and composer popovers must stay above the drawer behind them.
+    const hasBlockingOverlay = () => {
       const owner = rightOpen ? "workspace-file-panel" : leftOpen ? "workspace-sidebar" : null;
       const ownerElement = owner ? document.getElementById(owner) : null;
       for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], dialog[open]')) {
         if (dialog.id === owner || dialog.closest('[inert], [hidden], [aria-hidden="true"]')) continue;
-        // Persistent file collections belong to the drawer, not to a popup over it.
         if (dialog.getAttribute("role") === "listbox" && ownerElement?.contains(dialog)) continue;
         const style = getComputedStyle(dialog);
-        if (style.display !== "none" && style.visibility !== "hidden") return;
+        if (style.display !== "none" && style.visibility !== "hidden") return true;
       }
-      gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, direction, side, open, claimed: false };
+      return false;
+    };
+    const start = (event: TouchEvent) => {
+      cancel();
+      if (event.touches.length !== 1 || !(event.target instanceof Element)) return;
+      if (event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), .shell-topbar-overflow[open], [data-top-panel]')) return;
+      if (window.getSelection()?.isCollapsed === false) return;
+      // Outside-touch handlers may dismiss a popup before the first move.
+      if (hasBlockingOverlay()) return;
+      const touch = event.touches[0];
+      gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, target: event.target, direction: 0, side: null, open: false };
     };
     const move = (event: TouchEvent) => {
       if (!gesture) return;
-      if (event.touches.length !== 1 || event.touches[0].identifier !== gesture.id || !event.cancelable) {
+      if (event.touches.length !== 1 || event.touches[0].identifier !== gesture.id || !event.cancelable || window.getSelection()?.isCollapsed === false) {
         cancel();
         return;
       }
       const dx = event.touches[0].clientX - gesture.x;
       const dy = Math.abs(event.touches[0].clientY - gesture.y);
-      if (!gesture.claimed) {
+      if (!gesture.side) {
         if (Math.max(Math.abs(dx), dy) < DIRECTION_SLOP) return;
-        if (dx * gesture.direction <= 0 || Math.abs(dx) < dy * 1.5) {
+        if (Math.abs(dx) < dy * 1.5) {
           cancel();
           return;
         }
-        gesture.claimed = true;
+        const direction = dx > 0 ? 1 : -1;
+        if ((rightOpen && direction < 0) || (!rightOpen && leftOpen && direction > 0)) {
+          cancel();
+          return;
+        }
+        // Let code blocks, tab strips and other horizontal scrollers keep their pans.
+        for (let element: Element | null = gesture.target; element; element = element.parentElement) {
+          if (element.scrollWidth <= element.clientWidth + 1) continue;
+          const overflow = getComputedStyle(element).overflowX;
+          if (overflow === "auto" || overflow === "scroll") {
+            cancel();
+            return;
+          }
+        }
+        if (hasBlockingOverlay()) {
+          cancel();
+          return;
+        }
+        gesture.direction = direction;
+        gesture.side = rightOpen ? "right" : leftOpen ? "left" : direction > 0 ? "left" : "right";
+        gesture.open = !leftOpen && !rightOpen;
       }
       event.preventDefault();
     };
     const end = (event: TouchEvent) => {
       const current = gesture;
       cancel();
-      if (!current || !current.claimed) return;
+      if (!current || !current.side || window.getSelection()?.isCollapsed === false) return;
       // Suppress the compatibility click, including a pull released before the threshold.
       if (event.cancelable) event.preventDefault();
       const touch = event.changedTouches[0];

@@ -4178,11 +4178,6 @@ html[data-touch-targets="accessible"] .right-panel-toolbar {
     overflow: hidden;
     transition: transform var(--dur-slow) var(--ease-out-warm), visibility 0s;
   }
-  /* Frame documents cannot bubble touches: keep the closing edge in the parent. */
-  .right-panel-container iframe {
-    margin-left: 24px;
-    max-width: calc(100% - 24px);
-  }
   .right-panel-toolbar {
     padding-top: env(safe-area-inset-top, 0px);
     min-height: var(--shell-topbar-height) !important;

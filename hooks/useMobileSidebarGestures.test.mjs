@@ -7,7 +7,7 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
 const { useMobileSidebarGestures } = await jiti.import("./useMobileSidebarGestures.ts");
-afterEach(() => { cleanup(); document.body.replaceChildren(); });
+afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); document.body.replaceChildren(); });
 
 function mount(initial = {}) {
   return renderHook(({ enabled }) => {
@@ -30,6 +30,8 @@ function touch(type, x, y, { target = document.body, count = 1, identifier = 1, 
 }
 function swipe(x1, x2, { y1 = 300, y2 = 302, ...options } = {}) {
   touch("touchstart", x1, y1, options);
+  touch("touchmove", x1 + (x2 - x1) * 0.05, y1 + (y2 - y1) * 0.05, options);
+  touch("touchmove", x1 + (x2 - x1) * 0.1, y1 + (y2 - y1) * 0.1, options);
   const move = touch("touchmove", x2, y2, options);
   const end = touch("touchend", x2, y2, options);
   return { move, end };
@@ -37,28 +39,29 @@ function swipe(x1, x2, { y1 = 300, y2 = 302, ...options } = {}) {
 
 // jsdom covers recognition and state transitions; real browser touch input
 // must verify native scrolling, synthesized clicks, and drawer animations.
-test("edge pulls open and reverse pulls close each sidebar without opening the other", () => {
+test("intentional swipes from the screen interior open and reverse swipes close each sidebar", () => {
   const hook = mount();
-  const width = window.innerWidth;
-  const openLeft = swipe(14, 100);
+  const openLeft = swipe(140, 240);
   assert.deepEqual(hook.result.current, { leftOpen: true, rightOpen: false });
   assert.equal(openLeft.move.defaultPrevented, true);
   assert.equal(openLeft.end.defaultPrevented, true);
-  swipe(width - 14, width - 100);
+  const wrongDirection = swipe(140, 240);
+  assert.equal(wrongDirection.move.defaultPrevented, false);
+  assert.equal(wrongDirection.end.defaultPrevented, false);
+  assert.equal(hook.result.current.leftOpen, true);
+  swipe(240, 140);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
-  swipe(width - 14, width - 100);
+  swipe(240, 140);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: true });
-  swipe(14, 100);
+  swipe(140, 240);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
 });
 
-test("non-edge, short, wrong-direction and vertical pulls do not open drawers or steal scrolling", () => {
+test("short, vertical and diagonal pulls do not open drawers or steal scrolling", () => {
   const hook = mount();
-  assert.equal(swipe(120, 240).move.defaultPrevented, false);
-  assert.equal(swipe(14, 50).end.defaultPrevented, true);
-  assert.equal(swipe(20, 1).move.defaultPrevented, false);
-  assert.equal(swipe(14, 22, { y2: 410 }).move.defaultPrevented, false);
-  assert.equal(swipe(14, 100, { y2: 450 }).move.defaultPrevented, false);
+  assert.equal(swipe(140, 176).end.defaultPrevented, true);
+  assert.equal(swipe(140, 148, { y2: 410 }).move.defaultPrevented, false);
+  assert.equal(swipe(140, 226, { y2: 450 }).move.defaultPrevented, false);
   assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
 });
 
@@ -86,6 +89,18 @@ test("form editing and another visible dialog win over edge gestures", () => {
   const input = document.createElement("textarea");
   document.body.append(input);
   assert.equal(swipe(14, 100, { target: input }).move.defaultPrevented, false);
+  for (const tag of ["input", "select", "div"]) {
+    const control = document.createElement(tag);
+    if (tag === "div") control.setAttribute("contenteditable", "true");
+    document.body.append(control);
+    assert.equal(swipe(140, 240, { target: control }).move.defaultPrevented, false);
+    control.remove();
+  }
+  const topPanel = document.createElement("div");
+  topPanel.setAttribute("data-top-panel", "");
+  document.body.append(topPanel);
+  assert.equal(swipe(140, 240, { target: topPanel }).move.defaultPrevented, false);
+  topPanel.remove();
   const dialog = document.createElement("div");
   dialog.setAttribute("role", "dialog");
   document.body.append(dialog);
@@ -185,4 +200,83 @@ test("the drawer's persistent Git list allows closing while a nested popup still
   popup.remove();
   assert.equal(swipe(14, 100, { target: files }).move.defaultPrevented, true);
   assert.equal(hook.result.current.rightOpen, false);
+});
+
+test("native horizontal scrollers own their swipes while fitting or clipped content permits navigation", () => {
+  const hook = mount();
+  const scroller = document.createElement("div");
+  scroller.style.overflowX = "auto";
+  // jsdom has no layout; declared widths cover fitting and overflowing scroll surfaces.
+  Object.defineProperties(scroller, { clientWidth: { value: 200 }, scrollWidth: { value: 200, writable: true } });
+  const content = document.createElement("span");
+  scroller.append(content);
+  document.body.append(scroller);
+  swipe(140, 240, { target: scroller });
+  assert.equal(hook.result.current.leftOpen, true);
+  swipe(240, 140, { target: scroller });
+  assert.equal(hook.result.current.leftOpen, false);
+  scroller.scrollWidth = 800;
+  assert.equal(swipe(140, 240, { target: content }).move.defaultPrevented, false);
+  assert.equal(hook.result.current.leftOpen, false);
+  scroller.style.overflowX = "scroll";
+  assert.equal(swipe(140, 240, { target: scroller }).move.defaultPrevented, false);
+  assert.equal(hook.result.current.leftOpen, false);
+  scroller.style.overflowX = "hidden";
+  swipe(140, 240, { target: content });
+  assert.equal(hook.result.current.leftOpen, true);
+});
+
+test("adjusting selected text does not trigger a sidebar swipe", () => {
+  const hook = mount();
+  const text = document.createElement("span");
+  text.textContent = "Selected conversation text";
+  document.body.append(text);
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  window.getSelection().addRange(range);
+  assert.equal(swipe(140, 240, { target: text }).move.defaultPrevented, false);
+  assert.equal(hook.result.current.leftOpen, false);
+});
+
+test("a popup present at touchstart retains priority when that touch dismisses it", () => {
+  const hook = mount();
+  const popup = document.createElement("div");
+  popup.setAttribute("role", "menu");
+  document.body.append(popup);
+  document.addEventListener("touchstart", () => popup.remove(), { once: true });
+  assert.equal(swipe(140, 240).move.defaultPrevented, false);
+  assert.equal(hook.result.current.leftOpen, false);
+});
+
+test("text selection begun during a swipe cancels navigation before or after intent lock", () => {
+  const hook = mount();
+  const text = document.createElement("span");
+  text.textContent = "Selectable message";
+  document.body.append(text);
+  const select = () => {
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    window.getSelection().addRange(range);
+  };
+  touch("touchstart", 140, 300, { target: text });
+  select();
+  assert.equal(touch("touchmove", 240, 302, { target: text }).defaultPrevented, false);
+  touch("touchend", 240, 302, { target: text });
+  assert.equal(hook.result.current.leftOpen, false);
+  window.getSelection().removeAllRanges();
+  touch("touchstart", 140, 300, { target: text });
+  touch("touchmove", 160, 301, { target: text });
+  select();
+  assert.equal(touch("touchmove", 240, 302, { target: text }).defaultPrevented, false);
+  touch("touchend", 240, 302, { target: text });
+  assert.equal(hook.result.current.leftOpen, false);
+});
+
+test("a horizontal start that curves into a mostly vertical drag does not navigate", () => {
+  const hook = mount();
+  touch("touchstart", 140, 300);
+  touch("touchmove", 160, 301);
+  touch("touchmove", 240, 520);
+  touch("touchend", 240, 520);
+  assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
 });
