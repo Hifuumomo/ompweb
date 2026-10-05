@@ -3284,6 +3284,8 @@ test("overlapping Stops share one atomic withdrawal; an image-only entry does no
   assert.equal(world.calls.filter((c) => c.body?.type === "abort_and_restore_queue").length, 1);
   assert.equal(getDraft("abort-atomic-twice")?.value, "words");
   clearDraft("abort-atomic-twice");
+});
+
 function skillDiagnosticsSnapshot(showStartupDiagnostics, name = "review") {
   return {
     cwd: "/workspace",

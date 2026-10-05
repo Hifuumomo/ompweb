@@ -1318,7 +1318,6 @@ export class AgentSessionWrapper {
       slowModeEnabled: state.slowModeEnabled ?? false,
       slowModeScope: state.slowModeScope,
       usageLimit: state.usageLimit,
-      anthropicSlowMode: state.anthropicSlowMode,
       ...(skillDiagnostics ? { skillDiagnostics } : {}),
       todoPhases: state.todoPhases ?? [],
       extensionStatuses: Array.from(this.extensionStatuses, ([key, text]) => ({ key, text })),
