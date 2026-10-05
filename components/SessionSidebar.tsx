@@ -1090,7 +1090,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     ? worktreeStateByProject[normalizeProjectKey(selectedProject)]
     : undefined;
 
-  /** Inline branch label ("omp-web · main") from a project's OWN cached Git
+  /** Branch label below the workspace name, from a project's OWN cached Git
    *  state. Returns null when the project has no Git state or is not a git
    *  repo, so a non-Git / not-yet-loaded project never shows another repo's
    *  branch. */

@@ -28,7 +28,7 @@ import {
 } from "./SessionSidebar-chrome";
 
 /**
- * Right-edge status column shared by project headers and session rows.
+ * Shared indicator sizing; session rows keep theirs in the right-edge column.
  *
  * Keep the session indicator outside the timestamp and action controls so it
  * stays visible while the menu is open.
@@ -63,7 +63,7 @@ interface ProjectRowProps {
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
   activeWorktreeSwitcher?: ReactNode;
-  /** Active worktree/branch label shown inline beside the workspace name. */
+  /** Active worktree/branch label shown below the workspace name. */
   worktreeBranch?: string | null;
   worktreeToggleRef?: RefObject<HTMLButtonElement | null>;
   worktreeOpen?: boolean;
@@ -176,7 +176,7 @@ function ProjectRow({
           display: "flex",
           alignItems: "center",
           gap: 2,
-          height: 30,
+          height: worktreeBranch && worktreeToggleRef ? 48 : 30,
           margin: 0,
           padding: "0 6px 0 0",
           borderRadius: "var(--radius-control)",
@@ -187,157 +187,165 @@ function ProjectRow({
           ...(isDragTarget ? { outline: "1px solid var(--accent)", outlineOffset: -1 } : {}),
         }}
       >
-        {aliasEditing ? (
-          <div
-            className="sidebar-project-identity"
-            onClick={(event) => event.stopPropagation()}
-            style={{
-              flex: "0 1 auto",
-              minWidth: 0,
-              alignSelf: "stretch",
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              padding: "0 4px 0 10px",
-            }}
-          >
-            <Folder
-              size={15}
-              strokeWidth={1.8}
-              style={{ flexShrink: 0, color: "var(--text-muted)" }}
-              aria-hidden="true"
-            />
-            <input
-              ref={aliasInputRef}
-              autoFocus
-              aria-label={t("projects.aliasPrompt")}
-              value={aliasValue}
-              onChange={(event) => setAliasValue(event.target.value)}
-              onBlur={commitAliasEdit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commitAliasEdit();
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  aliasCancelRef.current = true;
-                  setAliasEditing(false);
-                }
-              }}
-              style={{ flex: 1, minWidth: 0, height: 22, padding: "2px 6px", border: "1px solid var(--accent)", borderRadius: "var(--radius-control)", outline: "none", background: "var(--bg)", color: "var(--text)", fontSize: 12, fontFamily: "var(--font-mono)", fontWeight: 600 }}
-            />
-          </div>
-        ) : (
-          <Tooltip
-            content={(
-              <span style={{ display: "grid", gap: 3, maxWidth: 360, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                <strong style={{ fontFamily: "inherit", fontSize: 11 }}>{t("sessionSidebar.launchConfigDirectory")}</strong>
-                <span>{project.path}</span>
-                {project.launchConfig?.profile && <span>profile: {project.launchConfig.profile}</span>}
-                {project.launchConfig?.advisor && <span>--advisor</span>}
-                {project.launchConfig?.extraArgs?.map((arg, index) => <span key={`${arg}-${index}`}>{arg}</span>)}
-              </span>
-            )}
-            side="right"
-          >
-          <button
-            className="sidebar-project-identity"
-            onClick={() => onActivate(project.path)}
-            aria-current={isActive ? "true" : undefined}
-            title={project.path}
-            style={{
-              flex: "0 1 auto",
-              minWidth: 0,
-              alignSelf: "stretch",
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              padding: "0 4px 0 10px",
-              background: "none", border: "none",
-              color: isActive ? "var(--text)" : hovered ? "var(--text)" : "var(--text-muted)",
-              cursor: "pointer",
-              textAlign: "left",
-            }}
-          >
-            <Folder
-              size={15}
-              strokeWidth={1.8}
-              style={{ flexShrink: 0, color: isActive ? "var(--accent)" : hovered ? "var(--text-muted)" : "var(--text-dim)", transition: "color var(--dur-fast) var(--ease-out-warm)" }}
-              aria-hidden="true"
-            />
-            <span
+        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: SIDEBAR_STATUS_GAP }}>
+          {aliasEditing ? (
+            <div
+              className="sidebar-project-identity"
+              onClick={(event) => event.stopPropagation()}
               style={{
+                flex: 1,
                 minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
-                fontWeight: 600,
-                letterSpacing: "-0.01em",
-                lineHeight: 1.25,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                padding: "0 4px 0 10px",
               }}
             >
-              {label}
-            </span>
-          </button>
-          </Tooltip>
-        )}
-        {worktreeBranch && worktreeToggleRef && (
-          <button
-            type="button"
-            ref={worktreeToggleRef}
-            onClick={onToggleWorktrees}
-            aria-expanded={worktreeOpen}
-            aria-haspopup="menu"
-            title={t("sessionSidebar.switchWorktreeTo", { path: worktreeBranch })}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              flexShrink: 0,
-              minWidth: 0,
-              maxWidth: 104,
-              height: 24,
-              padding: "0 6px",
-              border: "none",
-              borderRadius: "var(--radius-control)",
-              background: worktreeOpen ? "var(--bg-selected)" : "none",
-              color: worktreeOpen ? "var(--accent)" : hovered ? "var(--text-muted)" : "var(--text-dim)",
-              cursor: "pointer",
-              fontFamily: "var(--font-mono)",
-              fontSize: 10.5,
-              lineHeight: 1,
-              transition: "color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm)",
-            }}
-          >
-            <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.7 }}>·</span>
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worktreeBranch}</span>
-          </button>
-        )}
-        <div style={{ flex: 1 }} />
-        {hasActivity && (
-          <span
-            aria-label={t("projects.activity", { running: activity?.running ?? 0, unread: activity?.unread ?? 0, exited: activity?.exited ?? 0 })}
-            title={t("projects.activity", { running: activity?.running ?? 0, unread: activity?.unread ?? 0, exited: activity?.exited ?? 0 })}
-            className="sidebar-project-activity"
-            data-running={(activity?.running ?? 0) > 0 ? "true" : "false"}
-            role="status"
-            aria-live="polite"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: SIDEBAR_STATUS_SLOT, height: SIDEBAR_STATUS_SLOT, flexShrink: 0, lineHeight: 0 }}
-          >
-            {(activity?.exited ?? 0) > 0 ? (
-              <ExitedSessionIndicator title={t("projects.exited", { count: activity?.exited ?? 0 })} size={11} />
-            ) : (
-              <span
+              <Folder
+                size={15}
+                strokeWidth={1.8}
+                style={{ flexShrink: 0, color: "var(--text-muted)" }}
                 aria-hidden="true"
-                className="sidebar-project-activity-dot"
-                style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)" }}
               />
+              <input
+                ref={aliasInputRef}
+                autoFocus
+                aria-label={t("projects.aliasPrompt")}
+                value={aliasValue}
+                onChange={(event) => setAliasValue(event.target.value)}
+                onBlur={commitAliasEdit}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitAliasEdit();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    aliasCancelRef.current = true;
+                    setAliasEditing(false);
+                  }
+                }}
+                style={{ flex: 1, minWidth: 0, height: 22, padding: "2px 6px", border: "1px solid var(--accent)", borderRadius: "var(--radius-control)", outline: "none", background: "var(--bg)", color: "var(--text)", fontSize: 12, fontFamily: "var(--font-mono)", fontWeight: 600 }}
+              />
+            </div>
+          ) : (
+            <Tooltip
+              content={(
+                <span style={{ display: "grid", gap: 3, maxWidth: 360, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                  <strong style={{ fontFamily: "inherit", fontSize: 11 }}>{t("sessionSidebar.launchConfigDirectory")}</strong>
+                  <span>{project.path}</span>
+                  {project.launchConfig?.profile && <span>profile: {project.launchConfig.profile}</span>}
+                  {project.launchConfig?.advisor && <span>--advisor</span>}
+                  {project.launchConfig?.extraArgs?.map((arg, index) => <span key={`${arg}-${index}`}>{arg}</span>)}
+                </span>
+              )}
+              side="right"
+            >
+            <button
+              className="sidebar-project-identity"
+              onClick={() => onActivate(project.path)}
+              aria-current={isActive ? "true" : undefined}
+              title={project.path}
+              style={{
+                flex: "0 1 auto",
+                minWidth: 0,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                padding: "0 4px 0 10px",
+                background: "none", border: "none",
+                color: isActive ? "var(--text)" : hovered ? "var(--text)" : "var(--text-muted)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <Folder
+                size={15}
+                strokeWidth={1.8}
+                style={{ flexShrink: 0, color: isActive ? "var(--accent)" : hovered ? "var(--text-muted)" : "var(--text-dim)", transition: "color var(--dur-fast) var(--ease-out-warm)" }}
+                aria-hidden="true"
+              />
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    letterSpacing: "-0.01em",
+                    lineHeight: 1.25,
+                  }}
+                >
+                  {label}
+                </span>
+                {worktreeBranch && worktreeToggleRef && (
+                  <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.7 }}>·</span>
+                )}
+              </span>
+            </button>
+            </Tooltip>
+          )}
+            {hasActivity && (
+              <span
+                aria-label={t("projects.activity", { running: activity?.running ?? 0, unread: activity?.unread ?? 0, exited: activity?.exited ?? 0 })}
+                title={t("projects.activity", { running: activity?.running ?? 0, unread: activity?.unread ?? 0, exited: activity?.exited ?? 0 })}
+                className="sidebar-project-activity"
+                data-running={(activity?.running ?? 0) > 0 ? "true" : "false"}
+                role="status"
+                aria-live="polite"
+                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: SIDEBAR_STATUS_SLOT, height: SIDEBAR_STATUS_SLOT, flexShrink: 0, lineHeight: 0 }}
+              >
+                {(activity?.exited ?? 0) > 0 ? (
+                  <ExitedSessionIndicator title={t("projects.exited", { count: activity?.exited ?? 0 })} size={11} />
+                ) : (
+                  <span
+                    aria-hidden="true"
+                    className="sidebar-project-activity-dot"
+                    style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)" }}
+                  />
+                )}
+              </span>
             )}
-          </span>
-        )}
+          </div>
+          {worktreeBranch && worktreeToggleRef && (
+            <button
+              type="button"
+              ref={worktreeToggleRef}
+              onClick={onToggleWorktrees}
+              aria-expanded={worktreeOpen}
+              aria-haspopup="menu"
+              title={t("sessionSidebar.switchWorktreeTo", { path: worktreeBranch })}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                flexShrink: 0,
+                minWidth: 0,
+                maxWidth: "100%",
+                height: 24,
+                padding: "0 4px 0 32px",
+                border: "none",
+                borderRadius: "var(--radius-control)",
+                background: worktreeOpen ? "var(--bg-selected)" : "none",
+                color: worktreeOpen ? "var(--accent)" : hovered ? "var(--text-muted)" : "var(--text-dim)",
+                cursor: "pointer",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                lineHeight: 1,
+                transition: "color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm)",
+              }}
+            >
+              <GitBranch size={10} style={{ flexShrink: 0 }} aria-hidden="true" />
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worktreeBranch}</span>
+            </button>
+          )}
+        </div>
         <div
           className="sidebar-project-actions"
           style={{
