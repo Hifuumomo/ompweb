@@ -3,6 +3,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
+import { JSDOM } from "jsdom";
 
 const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
@@ -10,6 +11,25 @@ const jiti = createJiti(import.meta.url, {
 });
 const { ChatInput, ModelErrorBanner, filterModelOptions } = await jiti.import("./ChatInput.tsx");
 const { setDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+
+test("provider-defined reasoning levels appear once in the trigger", () => {
+  for (const thinkingLevel of ["ultra", "ultrathink-extended", "constructor"]) {
+    const html = renderToStaticMarkup(React.createElement(ChatInput, {
+      onSend() {},
+      onThinkingLevelChange() {},
+      thinkingLevel,
+      isStreaming: false,
+    }));
+    const dom = new JSDOM(html);
+    try {
+      const trigger = dom.window.document.querySelector(".composer-thinking-control > button");
+      assert.equal(trigger.textContent, thinkingLevel);
+      assert.ok(trigger.getAttribute("aria-label").endsWith(`: ${thinkingLevel}`));
+    } finally {
+      dom.window.close();
+    }
+  }
+});
 
 test("shows Queue instead of Stop for typed text during a run", () => {
   const draftKey = "chat-input-queue-action-test";

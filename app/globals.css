@@ -1945,11 +1945,13 @@ pre, code {
   flex-shrink: 0;
 }
 .composer-model-control {
-  /* Hug the name; the toolbar spacer takes the slack, so no dead gap opens
-     between the model name and the controls that follow it. */
-  flex: 0 1 auto;
-  max-width: 140px;
+  /* Shrink before wrapping; cap intrinsic width to keep adjacent controls close. */
+  flex: 1 1 0;
+  max-width: fit-content;
   min-width: 24px !important;
+}
+.composer-model-control > button > span {
+  max-width: 96px;
 }
 .composer-thinking-control {
   flex: 0 1 auto;
@@ -2014,12 +2016,11 @@ pre, code {
   height: .35em;
   border-radius: 50%;
 }
-/* Menu glyphs lead their 12px row labels: 14px on desktop, 16px on narrow
-   toolbars (the big-trigger container below). */
-.picker-thinking-card > .composer-thinking-glyph,
-.picker-row > .composer-thinking-glyph {
-  font-size: 14px;
-  min-width: 1em;
+@media (forced-colors: active) {
+  .composer-thinking-glyph {
+    forced-color-adjust: none;
+    color: ButtonText;
+  }
 }
 .composer-usage-limit-badge {
   flex: 0 1 auto;
@@ -2048,7 +2049,7 @@ pre, code {
 }
 @container (max-width: 400px) {
   .composer-thinking-control > button > svg,
-  .composer-thinking-control > button > .composer-thinking-label,
+  .composer-thinking-glyph[data-level] + .composer-thinking-label,
   .composer-fast-control > span,
   .composer-slow-control > span {
     display: none;
@@ -2057,8 +2058,7 @@ pre, code {
   .composer-thinking-control > button > .composer-thinking-glyph {
     font-size: 20px;
   }
-  .picker-thinking-card > .composer-thinking-glyph,
-  .picker-row > .composer-thinking-glyph {
+  .picker-thinking-card > .composer-thinking-glyph {
     font-size: 16px;
   }
   .composer-fast-control,
@@ -2078,9 +2078,6 @@ pre, code {
     justify-content: center;
     gap: 0 !important;
   }
-  .composer-model-control > button > svg:first-child {
-    display: block;
-  }
   .composer-model-control > button > span,
   .composer-model-control > button > svg:last-child {
     display: none;
@@ -2092,6 +2089,21 @@ pre, code {
   }
   .composer-primary-action {
     padding-inline: 6px;
+  }
+}
+@media (max-width: 640px) {
+  .composer-thinking-control {
+    max-width: 28px;
+  }
+  .composer-thinking-control > button > svg,
+  .composer-thinking-glyph[data-level] + .composer-thinking-label {
+    display: none;
+  }
+  .composer-thinking-control > button > .composer-thinking-glyph {
+    font-size: 20px;
+  }
+  .picker-thinking-card > .composer-thinking-glyph {
+    font-size: 16px;
   }
 }
 .composer-control-shelf {
