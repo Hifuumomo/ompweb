@@ -3454,7 +3454,7 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     padding-right: 48px !important;
   }
   .shell-topbar:has(.shell-session-info) {
-    padding-right: 92px !important;
+    padding-right: calc(92px + env(safe-area-inset-right, 0px)) !important;
   }
   .shell-topbar-overflow-content {
     overflow-x: auto;

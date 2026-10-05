@@ -2219,7 +2219,7 @@ export function AppShell() {
               className="shell-session-info"
               style={{
                 position: "absolute",
-                right: rightPanelOpen ? 4 : 44,
+                right: rightPanelOpen ? 4 : "calc(44px + env(safe-area-inset-right, 0px))",
                 top: isMobile ? "env(safe-area-inset-top)" : 4,
                 height: isMobile ? 44 : 28,
                 display: "flex",
