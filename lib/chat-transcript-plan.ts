@@ -24,7 +24,7 @@ export type TranscriptSegment =
   /** Visible agent text/images from one assistant message. `last` marks text
    *  that ends its message; only that segment carries usage and the error. */
   | { kind: "text"; index: number; blocks: AssistantContentBlock[]; last: boolean }
-  | { kind: "activity"; pieces: ActivityPiece[]; stepCount: number; toolCallCount: number };
+  | { kind: "activity"; pieces: ActivityPiece[]; stepCount: number; toolCallCount: number; boundary: { index: number; blockIndex: number } | null };
 
 export type TranscriptRow =
   | { kind: "message"; index: number }
@@ -55,9 +55,10 @@ export function planTurnSegments(
 ): TranscriptSegment[] {
   const segments: TranscriptSegment[] = [];
   let activity: Extract<TranscriptSegment, { kind: "activity" }> | null = null;
+  let boundary: { index: number; blockIndex: number } | null = null;
   const addActivity = (piece: ActivityPiece, toolCalls: number) => {
     if (!activity) {
-      activity = { kind: "activity", pieces: [], stepCount: 0, toolCallCount: 0 };
+      activity = { kind: "activity", pieces: [], stepCount: 0, toolCallCount: 0, boundary };
       segments.push(activity);
     }
     activity.pieces.push(piece);
@@ -87,6 +88,7 @@ export function planTurnSegments(
       lastText = { kind: "text", index: idx, blocks: text, last: false };
       segments.push(lastText);
       activity = null;
+      boundary = { index: idx, blockIndex: assistant.content.indexOf(text[text.length - 1]) };
       text = [];
     };
     const flushOther = () => {
@@ -111,6 +113,7 @@ export function planTurnSegments(
       lastText = { kind: "text", index: idx, blocks: [], last: false };
       segments.push(lastText);
       activity = null;
+      boundary = { index: idx, blockIndex: assistant.content.length };
     }
     // Text that ends its message carries the message's usage and error.
     if (lastText && segments.at(-1) === lastText) (lastText as Extract<TranscriptSegment, { kind: "text" }>).last = true;

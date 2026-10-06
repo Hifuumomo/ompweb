@@ -3615,3 +3615,30 @@ test("a fresh chat's /btw question attaches one event stream instead of an obser
   assert.equal(streamsBeforeOpen, 1, "the question owns the only stream");
   assert.equal(world.esInstances.length, 1);
 });
+
+test("native message ids and tool ids establish a deterministic thought handoff at message_end", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("s1", "fixture prompt");
+  await act(async () => { es.emit({ type: "agent_start" }); });
+  const first = { ...assistantMsg("unused", "same text"), content: [{ type: "thinking", thinking: "same thought" }] };
+  await act(async () => {
+    es.emit({ type: "message_start", messageId: "msg-1", message: first });
+    es.emit({ type: "message_update", messageId: "msg-1", message: first });
+  });
+  await settle(90);
+  assert.equal(w.latest.streamState.messageIdentity, "stream-s1:msg-1");
+  assert.equal(w.latest.messageIdentityLinks.size, 0, "thinking or timestamps are not a correlation key");
+  const completed = { ...first, content: [...first.content, { type: "toolCall", id: "shared-call", name: "bash", arguments: { command: "fixture" } }] };
+  await act(async () => { es.emit({ type: "message_end", messageId: "msg-1", message: completed }); });
+  await settle();
+  assert.equal(w.latest.messageIdentityLinks.get("stream-s1:msg-1"), "assistant-tool:shared-call");
+  assert.equal(w.latest.streamState.isStreaming, false);
+  await act(async () => {
+    es.emit({ type: "message_start", messageId: "msg-2", message: first });
+    es.emit({ type: "message_update", messageId: "msg-2", message: first });
+  });
+  await settle(90);
+  assert.equal(w.latest.streamState.messageIdentity, "stream-s1:msg-2");
+  assert.equal(w.latest.messageIdentityLinks.has("stream-s1:msg-2"), false, "identical messages remain independent");
+});

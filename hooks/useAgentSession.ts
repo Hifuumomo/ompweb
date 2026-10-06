@@ -14,6 +14,7 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { hasVisibleAssistantContent } from "@/lib/assistant-response";
+import { getAssistantToolIdentity } from "@/lib/message-display";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
 import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
 import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "@/lib/skill-diagnostics";
@@ -206,6 +207,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [entryIds, setEntryIds] = useState<string[]>([]);
   const [showPreCompactionHistory, setShowPreCompactionHistory] = useState(false);
   const [streamState, dispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
+  const [messageIdentityLinks, setMessageIdentityLinks] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const messageIdentityLinksRef = useRef(messageIdentityLinks);
+  /** Correlate only messages with a shared native/persisted tool id, never text or timestamps. */
+  const rememberMessageIdentity = useCallback((message: Partial<AgentMessage>, nativeIdentity: string | undefined) => {
+    const identity = getAssistantToolIdentity(message);
+    if (!nativeIdentity || !identity || messageIdentityLinksRef.current.get(nativeIdentity) === identity) return;
+    const next = new Map(messageIdentityLinksRef.current);
+    next.set(nativeIdentity, identity);
+    messageIdentityLinksRef.current = next;
+    setMessageIdentityLinks(next);
+  }, []);
   // Latest streaming snapshot for event handlers that must not close over a
   // stale streamState (quota error stamping onto the live assistant bubble).
   const streamStateRef = useRef(streamState);
@@ -2219,7 +2231,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (hasVisibleAssistantContent(msg)) runHadContentRef.current = true;
           const text = extractMessageText(msg);
           if (text && isQuotaLikeError(text)) lastQuotaErrorRef.current = text.slice(0, 800);
-          dispatch({ type: "update", message: normalizeToolCalls(msg as AgentMessage) });
+          const normalized = normalizeToolCalls(msg as AgentMessage);
+          const messageIdentity = typeof event.messageId === "string" && event.web ? `${event.web.streamId}:${event.messageId}` : undefined;
+          rememberMessageIdentity(normalized, messageIdentity);
+          dispatch({ type: "update", message: normalized, messageIdentity });
         }
         setAgentPhase(null);
         break;
@@ -2234,6 +2249,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const messageError = readAgentError(completed);
         if (messageError) lastRunErrorRef.current = messageError;
         if (completed) {
+          rememberMessageIdentity(normalizeToolCalls(completed), typeof event.messageId === "string" && event.web ? `${event.web.streamId}:${event.messageId}` : undefined);
           if (hasVisibleAssistantContent(completed)) runHadContentRef.current = true;
           const text = extractMessageText(completed as Partial<AgentMessage>);
           if (text && isQuotaLikeError(text)) lastQuotaErrorRef.current = text.slice(0, 800);
@@ -2513,7 +2529,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-}, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, applySkillDiagnosticsSnapshot, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages, applyQueueStateSnapshot]);
+}, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, applySkillDiagnosticsSnapshot, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages, applyQueueStateSnapshot, rememberMessageIdentity]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
     metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
@@ -2567,8 +2583,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
       }
       if (fields.message) {
-        dispatch(snapshot.streamingMessage
-          ? { type: "update", message: normalizeToolCalls(snapshot.streamingMessage as AgentMessage) }
+        const normalized = snapshot.streamingMessage ? normalizeToolCalls(snapshot.streamingMessage as AgentMessage) : null;
+        const messageIdentity = snapshot.streamingMessageId ? `${snapshot.cursor.streamId}:${snapshot.streamingMessageId}` : undefined;
+        if (normalized) rememberMessageIdentity(normalized, messageIdentity);
+        dispatch(normalized
+          ? { type: "update", message: normalized, messageIdentity }
           : snapshot.isStreaming ? { type: "start" } : { type: "reset" });
         if (!promptDispatchPendingRef.current && hasVisibleAssistantContent(snapshot.streamingMessage)) runHadContentRef.current = true;
         const messageError = readAgentError(snapshot.streamingMessage);
@@ -3900,6 +3919,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
+    messageIdentityLinks,
     agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, slowModeSupported, slowModeEnabled, slowModeScope, usageLimit, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, skillDiagnostics, forkingEntryId,

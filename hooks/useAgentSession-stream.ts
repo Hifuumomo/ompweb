@@ -36,11 +36,13 @@ export interface SessionData {
 export interface StreamingState {
   isStreaming: boolean;
   streamingMessage: Partial<AgentMessage> | null;
+  /** Native RPC messageId, namespaced by the owning web process. */
+  messageIdentity?: string;
 }
 
 export type StreamAction =
   | { type: "start" }
-  | { type: "update"; message: Partial<AgentMessage> }
+  | { type: "update"; message: Partial<AgentMessage>; messageIdentity?: string }
   | { type: "end" }
   | { type: "reset" };
 
@@ -49,7 +51,7 @@ export function streamReducer(state: StreamingState, action: StreamAction): Stre
     case "start":
       return { isStreaming: true, streamingMessage: null };
     case "update":
-      return { isStreaming: true, streamingMessage: action.message };
+      return { isStreaming: true, streamingMessage: action.message, messageIdentity: action.messageIdentity ?? state.messageIdentity };
     case "end":
     case "reset":
       return { isStreaming: false, streamingMessage: null };

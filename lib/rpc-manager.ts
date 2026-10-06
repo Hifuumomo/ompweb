@@ -307,6 +307,7 @@ export class AgentSessionWrapper {
   private streamId = randomUUID();
   private streamSequence = 0;
   private streamingMessage: Partial<AgentMessage> | null = null;
+  private streamingMessageId: string | undefined;
   private liveToolEvents = new Map<string, SessionLiveToolEvent>();
   /** Positive evidence for this run, retained after native completion but before disk append. */
   private responseObserved = false;
@@ -469,12 +470,14 @@ export class AgentSessionWrapper {
       isCompacting: this.compacting,
       responseObserved: this.responseObserved,
       streamingMessage: this.streamingMessage ? { ...this.streamingMessage } : null,
+      streamingMessageId: this.streamingMessageId,
       toolEvents: Array.from(this.liveToolEvents.values(), (event) => ({ ...event })),
     };
   }
 
   private clearLiveSnapshots(): void {
     this.streamingMessage = null;
+    this.streamingMessageId = undefined;
     this.liveToolEvents.clear();
     this.streamSequence += 1;
   }
@@ -1019,14 +1022,20 @@ export class AgentSessionWrapper {
       case "message_start":
       case "message_update": {
         const message = event.message as Partial<AgentMessage> | undefined;
-        if (message && message.role !== "user") this.streamingMessage = message;
+        if (message && message.role !== "user") {
+          this.streamingMessage = message;
+          this.streamingMessageId = typeof event.messageId === "string" ? event.messageId : undefined;
+        }
         if (this.responseRunActive && hasVisibleAssistantContent(message)) this.responseObserved = true;
         break;
       }
       case "message_end": {
         const message = event.message as Partial<AgentMessage> | undefined;
         if (this.responseRunActive && hasVisibleAssistantContent(message)) this.responseObserved = true;
-        if (message?.role && message.role === this.streamingMessage?.role) this.streamingMessage = null;
+        if (message?.role && message.role === this.streamingMessage?.role) {
+          this.streamingMessage = null;
+          this.streamingMessageId = undefined;
+        }
         if (message?.role === "toolResult" && message.toolCallId) this.liveToolEvents.delete(message.toolCallId);
         break;
       }

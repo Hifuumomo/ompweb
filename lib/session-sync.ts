@@ -24,6 +24,8 @@ export interface SessionLiveSnapshot {
   isPromptRunning: boolean;
   isCompacting: boolean;
   streamingMessage: Partial<AgentMessage> | null;
+  /** Native RPC messageId; not a durable session entry id. */
+  streamingMessageId?: string;
   toolEvents: SessionLiveToolEvent[];
   /** Positive run-scoped evidence survives message_end's delayed file write. */
   responseObserved?: boolean;

@@ -7,7 +7,9 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecuti
 import { translate, useI18n } from "@/lib/i18n";
 import { isGroupAnchor, planTranscriptRows, type ActivityPiece, type TranscriptRow } from "@/lib/chat-transcript-plan";
 import { resolveForkTargets } from "@/lib/chat-fork";
+import { getAssistantToolIdentity } from "@/lib/message-display";
 import { MessageView } from "./MessageView";
+import { TranscriptExpansionProvider, useTranscriptExpansion, thinkingExpansionId, toolExpansionId } from "./TranscriptExpansion";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ExtensionDialog } from "./ExtensionDialog";
 import { SubagentTranscriptDialog } from "./SubagentTranscriptDialog";
@@ -187,9 +189,9 @@ export function OmpRuntimeVersion() {
   );
 }
 
-function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messageCount: number; toolCallCount: number; children: () => ReactNode }) {
+function ProcessDetailsGroup({ expansionId, defaultOpen, descendantIds, messageCount, toolCallCount, children }: { expansionId: string; defaultOpen: boolean; descendantIds: string[]; messageCount: number; toolCallCount: number; children: () => ReactNode }) {
   const { t, tn } = useI18n();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useTranscriptExpansion(expansionId, defaultOpen, descendantIds);
   const parts = [t("chatWindow.processDetails"), tn("chatWindow.messageCount", messageCount)];
   if (toolCallCount > 0) parts.push(tn("chatWindow.toolCallCount", toolCallCount));
 
@@ -198,7 +200,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
+        onClick={() => setExpanded(!expanded)}
         className="process-details-toggle"
         title={expanded ? t("chatWindow.collapseProcessDetails") : t("chatWindow.expandProcessDetails")}
       >
@@ -244,7 +246,7 @@ function renderActivityPieces(messages: AgentMessage[], pieces: ActivityPiece[],
     rendered.push(
       renderMessage(first.msgIdx, {
         attachRef: false,
-        keyPrefix: `activity-tools-${first.msgIdx}-${rendered.length}`,
+        keyPrefix: `activity-tools-${first.block.toolCallId}`,
         messageOverride: { ...withAssistantBlocks(messages[first.msgIdx] as AssistantMessage, pendingToolCalls.map((c) => c.block), { omitUsage: true }), errorMessage: undefined },
         showTimestamp: false,
       }),
@@ -259,7 +261,7 @@ function renderActivityPieces(messages: AgentMessage[], pieces: ActivityPiece[],
       continue;
     }
     const msg = messages[piece.index] as AssistantMessage;
-    piece.blocks.forEach((block, bIdx) => {
+    piece.blocks.forEach((block) => {
       if (block.type === "toolCall") {
         pendingToolCalls.push({ block: block as ToolCallContent, msgIdx: piece.index });
         return;
@@ -268,7 +270,7 @@ function renderActivityPieces(messages: AgentMessage[], pieces: ActivityPiece[],
       rendered.push(
         renderMessage(piece.index, {
           attachRef: false,
-          keyPrefix: `activity-block-${piece.index}-${bIdx}`,
+          keyPrefix: `activity-block-${msg.content.indexOf(block)}`,
           messageOverride: { ...withAssistantBlocks(msg, [block], { omitUsage: true }), errorMessage: undefined },
           showTimestamp: false,
           sourceBlockIndices: [msg.content.indexOf(block)],
@@ -319,7 +321,7 @@ interface CommittedTranscriptProps {
  * change `streamingMessage`, rendered separately) do not re-run the O(history)
  * grouping/splitting work at display-frame cadence.
  */
-const CommittedTranscript = memo(function CommittedTranscript({
+export const CommittedTranscript = memo(function CommittedTranscript({
   messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, externalRunActive, isNew, forkingEntryId,
   handleFork, handleNavigate, handleEditContent, modelNames, messageCwd, onOpenFile, sessionId,
   toolCallsDefaultCollapsed, hideThinkingBlock, visibleCount, nearBottom, sentinelRef, handleLoadMoreClick,
@@ -360,13 +362,14 @@ const CommittedTranscript = memo(function CommittedTranscript({
     const canOfferFork = !sessionBusy && !isNew && !!forkTarget;
     const view = (
       <MessageView
-        key={`${keyPrefix}-view-${idx}`}
+        key={`${keyPrefix}-view-${entryIds[idx]}`}
         message={msg}
         toolResults={toolResultsMap}
         modelNames={modelNames}
         cwd={messageCwd}
         onOpenFile={onOpenFile}
         entryId={entryIds[idx]}
+        messageIdentity={getAssistantToolIdentity(messages[idx]) ?? entryIds[idx]}
         forkEntryId={forkTarget?.entryId}
         forkEditsPrompt={forkTarget?.editPrompt}
         onFork={canOfferFork ? handleFork : undefined}
@@ -385,7 +388,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
     );
     if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;
     return (
-      <div key={`${keyPrefix}-${idx}`} data-message-index={idx} ref={attachVisibleRef(idx, currentRefIdx)}>
+      <div key={`${keyPrefix}-${entryIds[idx]}`} data-message-index={idx} ref={attachVisibleRef(idx, currentRefIdx)}>
         {view}
       </div>
     );
@@ -430,28 +433,19 @@ const CommittedTranscript = memo(function CommittedTranscript({
       rendered.push(renderMessage(row.index));
       continue;
     }
-    const { userIndex: userIdx, endIndex: endIdx, segments } = row;
-
-    if (isLiveTail(row)) {
-      // Live tail: render the running turn flat so streaming updates and tool
-      // progress stay in view; it folds once the run ends.
-      for (let renderIdx = userIdx; renderIdx < endIdx; renderIdx++) {
-        rendered.push(renderMessage(renderIdx));
-      }
-      continue;
-    }
+    const { userIndex: userIdx, segments } = row;
 
     rendered.push(renderMessage(userIdx));
     // A message split across segments keeps its navigation ref on the first one.
     const attached = new Set<number>();
-    segments.forEach((segment, segmentIdx) => {
+    segments.forEach((segment) => {
       if (segment.kind === "text") {
         const msg = messages[segment.index] as AssistantMessage;
         const override = withAssistantBlocks(msg, segment.blocks, { omitUsage: !segment.last });
         if (!segment.last) override.errorMessage = undefined;
         rendered.push(renderMessage(segment.index, {
           attachRef: !attached.has(segment.index),
-          keyPrefix: `text-${segmentIdx}`,
+          keyPrefix: `text-${msg.content.indexOf(segment.blocks[0])}`,
           messageOverride: override,
           ...(segment.last ? {} : { showTimestamp: false }),
         }));
@@ -463,12 +457,20 @@ const CommittedTranscript = memo(function CommittedTranscript({
         .map((piece) => visibleRefIndexByMessage.get(piece.index))
         .find((value): value is number => typeof value === "number");
       for (const piece of segment.pieces) attached.add(piece.index);
+      /** A fold belongs to its anchor and preceding source text, never its size. */
+      const boundary = segment.boundary;
+      const expansionId = `activity:${entryIds[userIdx]}:${boundary ? `${entryIds[boundary.index]}:${boundary.blockIndex}` : "start"}`;
+      const descendantIds = segment.pieces.flatMap((piece) => (piece.blocks ?? []).flatMap((block) => {
+        if (block.type === "toolCall") return [toolExpansionId(block.toolCallId)];
+        if (block.type === "thinking") return [thinkingExpansionId(getAssistantToolIdentity(messages[piece.index]) ?? entryIds[piece.index], (messages[piece.index] as AssistantMessage).content.indexOf(block))];
+        return [];
+      }));
       rendered.push(
         <div
-          key={`activity-${userIdx}-${segmentIdx}`}
+          key={expansionId}
           ref={refIdx === undefined ? undefined : (el) => { messageRefs.current[refIdx] = el; }}
         >
-          <ProcessDetailsGroup messageCount={segment.stepCount} toolCallCount={segment.toolCallCount}>
+          <ProcessDetailsGroup expansionId={expansionId} defaultOpen={isLiveTail(row)} descendantIds={descendantIds} messageCount={segment.stepCount} toolCallCount={segment.toolCallCount}>
             {() => renderActivityPieces(messages, segment.pieces, renderMessage)}
           </ProcessDetailsGroup>
         </div>,
@@ -526,6 +528,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
 
   const {
     loading, error, messages, entryIds, showPreCompactionHistory, streamState,
+    messageIdentityLinks,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, thinkingLevel, fastModeEnabled, fastModeActive, slowModeSupported, slowModeEnabled, slowModeScope, usageLimit,
     externalRunActive,
     toolPreset,
@@ -1137,6 +1140,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   }
   return (
     <SpeechSynthesisProvider value={tts}>
+    <TranscriptExpansionProvider messageIdentities={messageIdentityLinks}>
     <GithubRepoContext.Provider value={githubRepo}>
     <AgentLinkContext.Provider value={openAgentLink}>
     <div
@@ -1319,8 +1323,10 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             />
             {streamState.isStreaming && streamState.streamingMessage && (
               <MessageView
-                key={streamState.streamingMessage.timestamp ?? "stream"}
+                key={streamState.messageIdentity ?? "stream"}
                 message={streamState.streamingMessage as AgentMessage}
+                messageIdentity={streamState.messageIdentity}
+                isStreaming={true}
                 modelNames={modelNames}
                 cwd={messageCwd}
                 onOpenFile={onOpenFile}
@@ -1468,6 +1474,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       </div>
     </AgentLinkContext.Provider>
     </GithubRepoContext.Provider>
+    </TranscriptExpansionProvider>
     </SpeechSynthesisProvider>
   );
 }

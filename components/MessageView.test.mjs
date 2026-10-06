@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import "../tests/setup-dom.mjs";
 import test, { afterEach } from "node:test";
 import React from "react";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react/pure.js";
+import { act, cleanup, fireEvent, render } from "@testing-library/react/pure.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
 
@@ -25,6 +25,9 @@ test("sent messages without timestamps or branch metadata still offer copy", () 
 // jsdom). Verify code gutters, math, tables, images and spacing in Chromium;
 // do not substitute textContent and claim equivalent coverage here.
 test("message Markdown copy preserves source, excludes activity, and confirms success in Strict Mode", async (t) => {
+  // Feedback expires after 1500ms; CPU contention must not advance its lifetime
+  // while React and the assertion are waiting to observe the successful copy.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   let clipboard = "";
   const originalMatchMedia = window.matchMedia;
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
@@ -50,13 +53,12 @@ test("message Markdown copy preserves source, excludes activity, and confirms su
   for (const message of messages) {
     const view = render(React.createElement(React.StrictMode, null, React.createElement(MessageView, { message })));
     const button = view.getByRole("button", { name: "Copy as Markdown" });
-    await act(async () => { fireEvent.click(button); });
+    await act(async () => { fireEvent.click(button); await Promise.resolve(); });
     assert.equal(clipboard, message.role === "user" ? source : `${source}\n\n## Conclusion\n\nDone.`);
-    // The click handler's copy chain (clipboard write -> setCopied) resolves on a
-    // microtask that can land AFTER act's flush under load, leaving the "Copied"
-    // label uncommitted when this line reads the DOM. waitFor lets React commit
-    // instead of racing the scheduler (flaked under parallel suite load).
-    await waitFor(() => assert.equal(button.textContent, "Copied"));
+    // Flush clipboard completion without racing the feedback's expiry timer.
+    assert.equal(button.textContent, "Copied");
+    await act(async () => { t.mock.timers.tick(1500); });
+    assert.equal(button.textContent, "Markdown");
     view.unmount();
   }
 });

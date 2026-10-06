@@ -32,6 +32,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
+- Preserve user choices for **Process details**, thinking, tools, and tool groups within a session view when activity updates, groups grow, or live/idle rendering changes. Restore choices after closing and reopening parent details and through tool-bearing streaming commits. Keep assistant text visible and deferred details lazy. Pure thinking/text commits without a tool ID still lack a reliable history identity mapping; existing commit-time duplicate/gap display remains. See the [repair and verification record](docs/process-expansion-fix.md). This source change does not update an installed global npm package.
 - Balance the composer icons on phones and narrow toolbars with a slightly smaller effort-level icon and a larger Slow-mode snail, while keeping menu icon sizes unchanged.
 - Keep the model picker on the left and reasoning effort, Fast, Slow, microphone, and Send/Stop controls in a right-aligned composer group, including wrapped mobile rows.
 - The Provider Usage panel now shows each account's email instead of omp's redacted form (`an*`); accounts without an email show as **Account N**. Only the email, plan and limits reach the browser.

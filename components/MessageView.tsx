@@ -9,9 +9,10 @@ import { useSpeechContext } from "@/hooks/useSpeechSynthesis";
 import { ClickableImage } from "./ImageLightbox";
 import { translate, useI18n, type Locale } from "@/lib/i18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
-import { isEmptyThinkingBlock } from "@/lib/message-display";
+import { getAssistantToolIdentity, isEmptyThinkingBlock } from "@/lib/message-display";
 import { Tooltip, Collapsible, CollapsibleTrigger } from "./ui/primitives";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
+import { TranscriptExpansionProvider, useTranscriptExpansion, toolExpansionId, thinkingExpansionId } from "./TranscriptExpansion";
 import { formatCompactNumber } from "@/lib/format";
 import { TaskResultPanel } from "./MessageView-task-panel";
 import { HubResultPanel } from "./MessageView-hub-panel";
@@ -195,6 +196,8 @@ interface Props {
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
   entryId?: string;
+  /** Stable live identity, retained when the corresponding entry is committed. */
+  messageIdentity?: string;
   /** Branch point omp's `branch` command accepts for this message (a user entry; see lib/chat-fork.ts). */
   forkEntryId?: string;
   /** Forking puts the branched prompt back into the composer (edit-and-resend). */
@@ -244,12 +247,12 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, forkEntryId, forkEditsPrompt, onFork, forking, forkDisabled, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, hideThinking = false, sourceBlockIndices, liveTokensPerSecond }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, messageIdentity, forkEntryId, forkEditsPrompt, onFork, forking, forkDisabled, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, toolCallsDefaultCollapsed = true, hideThinking = false, sourceBlockIndices, liveTokensPerSecond }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} forkDisabled={forkDisabled} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} forkEntryId={forkEntryId} forkEditsPrompt={forkEditsPrompt} onFork={onFork} forking={forking} forkDisabled={forkDisabled} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} hideThinking={hideThinking} sourceBlockIndices={sourceBlockIndices} liveTokensPerSecond={liveTokensPerSecond} />;
+    return <TranscriptExpansionProvider><AssistantMessageView message={message as AssistantMessage} messageIdentity={messageIdentity} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} forkEntryId={forkEntryId} forkEditsPrompt={forkEditsPrompt} onFork={onFork} forking={forking} forkDisabled={forkDisabled} toolCallsDefaultCollapsed={toolCallsDefaultCollapsed} hideThinking={hideThinking} sourceBlockIndices={sourceBlockIndices} liveTokensPerSecond={liveTokensPerSecond} /></TranscriptExpansionProvider>;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -280,6 +283,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.cwd === next.cwd
     && prev.onOpenFile === next.onOpenFile
     && prev.entryId === next.entryId
+    && prev.messageIdentity === next.messageIdentity
     && prev.forkEntryId === next.forkEntryId
     && prev.forkEditsPrompt === next.forkEditsPrompt
     && prev.onFork === next.onFork
@@ -539,6 +543,7 @@ function AssistantMessageView({
   prevTimestamp,
   sessionId,
   entryId,
+  messageIdentity,
   forkEntryId,
   forkEditsPrompt = false,
   onFork,
@@ -559,6 +564,7 @@ function AssistantMessageView({
   prevTimestamp?: number;
   sessionId?: string;
   entryId?: string;
+  messageIdentity?: string;
   /** User entry omp's `branch` command accepts for this reply (see lib/chat-fork.ts). */
   forkEntryId?: string;
   forkEditsPrompt?: boolean;
@@ -572,6 +578,8 @@ function AssistantMessageView({
 }) {
   const { t, locale } = useI18n();
   const { isSupported: ttsSupported, isSpeaking: ttsSpeaking, speakingId: ttsSpeakingId, toggle: ttsToggle } = useSpeechContext();
+  const localIdentity = useId();
+  const disclosureIdentity = getAssistantToolIdentity(message) ?? messageIdentity ?? entryId ?? localIdentity;
   const speakableText = useMemo(() => {
     return (message.content ?? [])
       .filter((b): b is TextContent => b.type === "text" && typeof b.text === "string")
@@ -729,12 +737,12 @@ function AssistantMessageView({
       </div>
 
       <div ref={bodyRef} data-selection-scope="message" tabIndex={-1} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        {groupAdjacentBlocks(blockItems).map((group, groupIdx) => {
+        {groupAdjacentBlocks(blockItems).map((group) => {
           if (group.type === "single") {
             const { block, originalIndex } = group.item;
             return (
               <BlockView
-                key={`${entryId ?? "stream"}-${originalIndex}`}
+                key={block.type === "toolCall" ? toolExpansionId(block.toolCallId) : `${disclosureIdentity}-${originalIndex}`}
                 block={block}
                 toolResults={toolResults}
                 isStreaming={isStreaming}
@@ -745,13 +753,14 @@ function AssistantMessageView({
                 sessionId={sessionId}
                 entryId={entryId}
                 blockIndex={originalIndex}
+                messageIdentity={disclosureIdentity}
                 toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
               />
             );
           }
           return (
             <ToolCallGroupBlock
-              key={`${entryId ?? "stream"}-group-${groupIdx}`}
+              key={`tool-group:${group.items[0].block.toolCallId}`}
               items={group.items}
               toolResults={toolResults}
               isStreaming={isStreaming}
@@ -833,12 +842,12 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, blockIndex, toolCallsDefaultCollapsed }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; blockIndex: number; toolCallsDefaultCollapsed: boolean }) {
+function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, messageIdentity, blockIndex, toolCallsDefaultCollapsed }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; messageIdentity: string; blockIndex: number; toolCallsDefaultCollapsed: boolean }) {
   if (block.type === "text") {
     return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} />;
   }
   if (block.type === "thinking") {
-    return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} sessionId={sessionId} entryId={entryId} blockIndex={blockIndex} />;
+    return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} sessionId={sessionId} entryId={entryId} blockIndex={blockIndex} expansionId={thinkingExpansionId(messageIdentity, blockIndex)} />;
   }
   if (block.type === "toolCall") {
     const tc = block as ToolCallContent;
@@ -863,38 +872,47 @@ const TextBlock = memo(function TextBlock({ block, isStreaming, cwd, onOpenFile 
   && prev.onOpenFile === next.onOpenFile
 ));
 
-const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
+const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex, expansionId }: {
   block: ThinkingContent;
   duration?: number;
   sessionId?: string;
   entryId?: string;
   blockIndex: number;
+  expansionId: string;
 }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useTranscriptExpansion(expansionId);
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    setExpanded(nextOpen);
-    if (!nextOpen || !block.deferred || content !== null) return;
+  /** Restored open details load the original source block without another click. */
+  useEffect(() => {
+    if (!expanded || !block.deferred || content !== null) return;
     if (!sessionId || !entryId) {
       setError(t("messageView.thinkingUnavailable"));
       return;
     }
-
+    let active = true;
     setLoading(true);
     setError(null);
     void loadThinkingContent(sessionId, entryId, blockIndex)
-      .then((text) => setContent(text))
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
-  };
+      .then((text) => {
+        if (!active) return;
+        setContent(text);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
+    return () => { active = false; };
+  }, [expanded, block.deferred, content, sessionId, entryId, blockIndex, t]);
 
   return (
     <div className="activity-row" data-activity-operation="true">
-      <Collapsible open={expanded} onOpenChange={handleOpenChange}>
+      <Collapsible open={expanded} onOpenChange={setExpanded}>
         <CollapsibleTrigger className="activity-row-trigger">
           <span className="activity-row-indicator" aria-hidden>
             <Brain size={12} strokeWidth={1.8} />
@@ -934,6 +952,7 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
   && prev.sessionId === next.sessionId
   && prev.entryId === next.entryId
   && prev.blockIndex === next.blockIndex
+  && prev.expansionId === next.expansionId
 ));
 
 
@@ -984,17 +1003,9 @@ const ToolCallBlock = memo(function ToolCallBlock({
   const isRunning = result?.partial === true;
   // A running tool opens its row when the interface keeps tool calls expanded
   // ("Keep tool calls collapsed" off) so its output is watchable live.
-  const [expanded, setExpanded] = useState(Boolean(isStreaming || isRunning) && !defaultCollapsed);
-  const [inputExpanded, setInputExpanded] = useState(false);
+  const [expanded, setExpanded] = useTranscriptExpansion(toolExpansionId(block.toolCallId), Boolean(isStreaming || isRunning) && !defaultCollapsed, [], true);
+  const [inputExpanded, setInputExpanded] = useTranscriptExpansion(`tool-input:${block.toolCallId}`);
   const inputId = useId();
-  // The row can also mount while the tool is idle and start running later (the
-  // assistant message commits before `tool_execution_start`). It is never
-  // auto-collapsed: the output stays where the user was reading it.
-  const wasRunningRef = useRef(false);
-  useEffect(() => {
-    if (isRunning && !wasRunningRef.current && !defaultCollapsed) setExpanded(true);
-    wasRunningRef.current = isRunning;
-  }, [isRunning, defaultCollapsed]);
   const resultText = result
     ? (typeof result.content === "string"
         ? result.content
@@ -1152,7 +1163,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
                 className="tool-call-input-toggle"
                 aria-expanded={inputExpanded}
                 aria-controls={inputId}
-                onClick={() => setInputExpanded((value) => !value)}
+                onClick={() => setInputExpanded(!inputExpanded)}
               >
                 {t(inputExpanded ? "messageView.collapseInput" : "messageView.showFullInput")}
               </button>
@@ -1222,6 +1233,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
   && prev.result === next.result
   && prev.duration === next.duration
   && prev.defaultCollapsed === next.defaultCollapsed
+  && prev.isStreaming === next.isStreaming
   && prev.inGroup === next.inGroup
   && prev.onOpenFile === next.onOpenFile
 ));
@@ -1242,7 +1254,7 @@ const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
   toolCallsDefaultCollapsed: boolean;
 }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(!toolCallsDefaultCollapsed);
+  const [expanded, setExpanded] = useTranscriptExpansion(`tool-group:${items[0].block.toolCallId}`, !toolCallsDefaultCollapsed, items.map(({ block }) => toolExpansionId(block.toolCallId)));
   const blocks = items.map((i) => i.block);
   const groupSummary = useMemo(() => summarizeToolCallGroup(blocks), [blocks]);
 
@@ -1335,7 +1347,10 @@ const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
     && inputsShallowEqual(item.block.input, next.items[i]?.block.input)
   ))
   && prev.onOpenFile === next.onOpenFile
-  && (!prev.toolResults || !next.toolResults || prev.items.every((item) => prev.toolResults?.get(item.block.toolCallId) === next.toolResults?.get(item.block.toolCallId)))
+  && prev.isStreaming === next.isStreaming
+  && prev.toolCallsDefaultCollapsed === next.toolCallsDefaultCollapsed
+  && prev.toolCallDurations === next.toolCallDurations
+  && prev.items.every((item) => prev.toolResults?.get(item.block.toolCallId) === next.toolResults?.get(item.block.toolCallId))
 ));
 
 
