@@ -12,7 +12,7 @@ import { toast } from "./ui/toast";
 import { clearLastOpenSession, setLastOpenSession, workspaceKeyOf } from "@/lib/workspace-memory";
 import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
-import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, GitBranch, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import {
   EMPTY_PROJECT_SET,
@@ -69,6 +69,8 @@ interface Props {
   updateAvailable?: boolean;
   /** Opens the archived sessions browser. */
   onOpenArchive?: () => void;
+  /** Opens the current persisted session's prompt tree when navigation is ready. */
+  onOpenConversationTree?: () => void;
   /** In-app back/forward over visited chat views (sidebar header buttons). */
   navigation?: {
     canBack: boolean;
@@ -90,7 +92,7 @@ interface Props {
 
 
 
-export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onWorkspaceOptionsChange, addProjectOpen, setAddProjectOpen, usageVisible = true, onOpenSettings, onOpenArchive, navigation, updateAvailable, settingsOpen = false, onClose }: Props) {
+export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, optimisticSession, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onWorkspaceOptionsChange, addProjectOpen, setAddProjectOpen, usageVisible = true, onOpenSettings, onOpenArchive, onOpenConversationTree, navigation, updateAvailable, settingsOpen = false, onClose }: Props) {
 
 
   const { t } = useI18n();
@@ -1237,6 +1239,15 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
                 </Tooltip>
               </span>
             )}
+            <Tooltip content={t("conversationTree.open")} side="bottom">
+              <SidebarIconButton
+                label={t("conversationTree.open")}
+                onClick={() => onOpenConversationTree?.()}
+                disabled={!selectedSessionId || Boolean(optimisticSession) || !onOpenConversationTree}
+              >
+                <GitBranch size={15} strokeWidth={1.9} aria-hidden="true" />
+              </SidebarIconButton>
+            </Tooltip>
             {onOpenArchive && (
               <Tooltip content={t("sessionSidebar.archiveBrowserTitle")} side="bottom">
                 <SidebarIconButton

@@ -7,20 +7,62 @@ import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { AlertTriangle } from "lucide-react";
 import OmpWebLogo from "./OmpWebLogo";
 /**
- * Path label that ellipsizes on the LEFT, keeping the (most relevant) trailing
- * segments visible: "…orkspace/pi-web". Shows as much of the path as fits
- * instead of a fixed number of segments. The rtl container moves the ellipsis
- * to the left edge; the inner plaintext bidi isolation keeps the path itself
- * rendered strictly left-to-right (no punctuation reordering).
+ * Keep complete trailing directories when a path outgrows its available width.
+ * Cache font-measured candidates; resizing only selects a suffix, not a layout
+ * probe for each directory. Plain labels keep the existing left ellipsis.
  */
 function PathLabel({ text, style }: { text: string; style?: CSSProperties }) {
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const [visibleText, setVisibleText] = useState(text);
+  const isPath = /^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/])/.test(text);
+
+  useLayoutEffect(() => {
+    setVisibleText(text);
+    if (!isPath) return;
+    const element = labelRef.current!;
+    const context = document.createElement("canvas").getContext("2d")!;
+    const candidates = [text];
+    for (const match of text.matchAll(/[\\/]/g)) {
+      const tail = text.slice(match.index + 1);
+      if (tail) candidates.push(`...${match[0]}${tail}`);
+    }
+    let widths: number[] = [];
+    let availableWidth = element.clientWidth;
+    const selectSuffix = () => {
+      const index = widths.findIndex((width) => width <= availableWidth);
+      setVisibleText(candidates[index < 0 ? candidates.length - 1 : index]);
+    };
+    const measureCandidates = () => {
+      const font = getComputedStyle(element);
+      context.font = font.font;
+      const spacing = parseFloat(font.letterSpacing) || 0;
+      widths = candidates.map((candidate) => context.measureText(candidate).width + Array.from(candidate).length * spacing);
+      selectSuffix();
+    };
+    measureCandidates();
+    const observer = new ResizeObserver(([entry]) => {
+      availableWidth = entry.contentRect.width;
+      selectSuffix();
+    });
+    observer.observe(element);
+    document.fonts.addEventListener("loadingdone", measureCandidates);
+    return () => {
+      observer.disconnect();
+      document.fonts.removeEventListener("loadingdone", measureCandidates);
+    };
+  }, [text, isPath, style?.fontFamily, style?.fontSize, style?.fontWeight, style?.fontStyle, style?.letterSpacing]);
+
   return (
     <span
+      ref={labelRef}
+      title={text}
+      aria-label={text}
       style={{
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
         display: "block",
+        position: "relative",
         minWidth: 0,
         lineHeight: 1.35,
         direction: "rtl",
@@ -28,7 +70,15 @@ function PathLabel({ text, style }: { text: string; style?: CSSProperties }) {
         ...style,
       }}
     >
-      <span style={{ unicodeBidi: "plaintext" }}>{text}</span>
+      {isPath ? (
+        <>
+          {/* The full-width sizer prevents shortening from changing flex sizing. */}
+          <span style={{ opacity: 0, unicodeBidi: "plaintext" }}>{text}</span>
+          <span aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden", textOverflow: "ellipsis", unicodeBidi: "plaintext" }}>{visibleText}</span>
+        </>
+      ) : (
+        <span style={{ unicodeBidi: "plaintext" }}>{text}</span>
+      )}
     </span>
   );
 }

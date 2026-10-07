@@ -18,6 +18,7 @@ import { type Tab } from "./TabBar";
 import { type FileExplorerHandle } from "./FileExplorer";
 import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
+import { ConversationTreeDialog } from "./ConversationTreeDialog";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
 import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
@@ -128,6 +129,7 @@ export function AppShell({ appName }: { appName: string }) {
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [explorerRefreshing, setExplorerRefreshing] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [conversationTreeTarget, setConversationTreeTarget] = useState<{ sessionId: string; sessionKey: number } | null>(null);
   const [archiveBrowserOpen, setArchiveBrowserOpen] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -157,7 +159,7 @@ export function AppShell({ appName }: { appName: string }) {
   // DOM element + live width during a drag (see handleSidebarResizeStart).
   const sidebarContainerRef = useModalDialog<HTMLElement>({
     onClose: () => setSidebarOpen(false),
-    active: isMobile && mobileSidebarReady && sidebarOpen && !settingsTab,
+    active: isMobile && mobileSidebarReady && sidebarOpen && !settingsTab && !conversationTreeTarget,
   });
   const pendingSidebarWidthRef = useRef<number>(SIDEBAR_DEFAULT_WIDTH);
   useEffect(() => {
@@ -656,17 +658,36 @@ export function AppShell({ appName }: { appName: string }) {
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
   const [branchActiveLeafId, setBranchActiveLeafId] = useState<string | null>(null);
+  const [branchBusy, setBranchBusy] = useState(false);
+  const [branchSessionKey, setBranchSessionKey] = useState<number | null>(null);
   const branchLeafChangeFnRef = useRef<((leafId: string | null) => void) | null>(null);
+  const branchSessionKeyRef = useRef<number | null>(null);
 
-  const handleBranchDataChange = useCallback((tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => {
+  const handleBranchDataChange = useCallback((tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, busy: boolean) => {
     setBranchTree(tree);
     setBranchActiveLeafId(activeLeafId);
+    setBranchBusy(busy);
+    setBranchSessionKey(sessionKey);
+    branchSessionKeyRef.current = sessionKey;
     branchLeafChangeFnRef.current = onLeafChange;
-  }, []);
+  }, [sessionKey]);
 
   const handleBranchLeafChange = useCallback((leafId: string | null) => {
+    if (branchSessionKeyRef.current !== sessionKey || settingsTab) return;
     branchLeafChangeFnRef.current?.(leafId);
-  }, []);
+  }, [sessionKey, settingsTab]);
+
+  /** Bind the dialog to its opener's chat instance, never a later selection. */
+  const conversationTreeOpen = conversationTreeTarget?.sessionId === selectedSession?.id
+    && conversationTreeTarget?.sessionKey === sessionKey && !settingsTab;
+  useEffect(() => {
+    setConversationTreeTarget(null);
+  }, [selectedSession?.id, sessionKey, settingsTab]);
+  const handleOpenConversationTree = useCallback(() => {
+    if (!selectedSession?.path || branchSessionKey !== sessionKey || settingsTab) return;
+    setConversationTreeTarget({ sessionId: selectedSession.id, sessionKey });
+    if (isMobile) setSidebarOpen(false);
+  }, [selectedSession, branchSessionKey, sessionKey, settingsTab, isMobile]);
 
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [systemPromptLoading, setSystemPromptLoading] = useState(false);
@@ -1000,7 +1021,7 @@ export function AppShell({ appName }: { appName: string }) {
     setRightPanelMounted(element !== null);
   }, [rightPanelRef]);
   useMobileSidebarGestures({
-    enabled: isMobile && mobileSidebarReady && !settingsTab,
+    enabled: isMobile && mobileSidebarReady && !settingsTab && !conversationTreeTarget,
     leftOpen: sidebarOpen,
     rightOpen: rightPanelOpen,
     onLeftOpenChange: setSidebarOpen,
@@ -1764,6 +1785,7 @@ export function AppShell({ appName }: { appName: string }) {
       settingsOpen={Boolean(settingsTab)}
       onOpenSettings={() => setSettingsTab((prev) => prev ? null : "general")}
       onOpenArchive={() => setArchiveBrowserOpen(true)}
+      onOpenConversationTree={selectedSession?.path && branchSessionKey === sessionKey ? handleOpenConversationTree : undefined}
       navigation={sidebarNavigation}
       updateAvailable={Boolean(appUpdate?.updateAvailable) || ompUpdateAvailable}
       onClose={isMobile ? handleSidebarToggle : undefined}
@@ -2531,6 +2553,18 @@ export function AppShell({ appName }: { appName: string }) {
       )}
 
     </div>
+    {conversationTreeOpen && selectedSession && (
+      <ConversationTreeDialog
+        key={`${selectedSession.id}:${sessionKey}`}
+        sessionId={selectedSession.id}
+        cwd={selectedSession.cwd}
+        activeLeafId={branchActiveLeafId}
+        open={conversationTreeOpen}
+        onOpenChange={(open) => { if (!open) setConversationTreeTarget(null); }}
+        onLeafChange={handleBranchLeafChange}
+        busy={branchBusy}
+      />
+    )}
     <AppUpdateDialog open={appUpdateDialogOpen} update={appUpdate} phase={appUpdatePhase} visibleStage={appUpdateVisibleStage} error={appUpdateError} onProceed={() => void proceedWithAppUpdate()} onNotNow={dismissAppUpdate} />
     {archiveBrowserOpen && (
       <ArchiveBrowser
