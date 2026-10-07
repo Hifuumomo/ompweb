@@ -18,7 +18,7 @@ import { type Tab } from "./TabBar";
 import { type FileExplorerHandle } from "./FileExplorer";
 import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
-import { ConversationTreeDialog } from "./ConversationTreeDialog";
+import { ConversationTreeDialog, type ConversationTreeDeleteOutcome } from "./ConversationTreeDialog";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
 import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
@@ -680,6 +680,10 @@ export function AppShell({ appName }: { appName: string }) {
   /** Bind the dialog to its opener's chat instance, never a later selection. */
   const conversationTreeOpen = conversationTreeTarget?.sessionId === selectedSession?.id
     && conversationTreeTarget?.sessionKey === sessionKey && !settingsTab;
+  const conversationTreeContextRef = useRef({ target: conversationTreeTarget, sessionId: selectedSession?.id, sessionKey, settingsTab });
+  useLayoutEffect(() => {
+    conversationTreeContextRef.current = { target: conversationTreeTarget, sessionId: selectedSession?.id, sessionKey, settingsTab };
+  }, [conversationTreeTarget, selectedSession?.id, sessionKey, settingsTab]);
   useEffect(() => {
     setConversationTreeTarget(null);
   }, [selectedSession?.id, sessionKey, settingsTab]);
@@ -1433,6 +1437,32 @@ export function AppShell({ appName }: { appName: string }) {
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
   }, [router, hydrateSelectedSession]);
+
+  /** Reload persisted history without native tree navigation or clearing this session's composer draft. */
+  const handleConversationTreeDeleted = useCallback((outcome: ConversationTreeDeleteOutcome) => {
+    const opener = conversationTreeTarget;
+    if (!opener) return;
+    publishSessionsChanged([opener.sessionId]);
+    setRefreshKey((key) => key + 1);
+    // A committed cleanup warning remains relevant even if the user has since opened another chat.
+    if (outcome.cleanupWarning || outcome.responseUnreadable) {
+      toast.info(
+        t("conversationTree.deletedWarning"),
+        t(outcome.cleanupWarning ? "conversationTree.cleanupWarning" : "conversationTree.responseUnreadableWarning"),
+        { timeout: 0 },
+      );
+    }
+    const current = conversationTreeContextRef.current;
+    if (current.target !== opener || current.sessionId !== opener.sessionId || current.sessionKey !== opener.sessionKey || current.settingsTab) return;
+    toast.success(t("conversationTree.deleted"), t("conversationTree.nativeAfterDelete"));
+    setConversationTreeTarget(null);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setBranchSessionKey(null);
+    branchSessionKeyRef.current = null;
+    branchLeafChangeFnRef.current = null;
+    setSessionKey((key) => key + 1);
+  }, [conversationTreeTarget, t]);
 
   const handleSessionDeleted = useCallback((sessionId: string) => {
     // The composer for this session can never be reopened, so its draft would
@@ -2562,6 +2592,7 @@ export function AppShell({ appName }: { appName: string }) {
         open={conversationTreeOpen}
         onOpenChange={(open) => { if (!open) setConversationTreeTarget(null); }}
         onLeafChange={handleBranchLeafChange}
+        onDeleted={handleConversationTreeDeleted}
         busy={branchBusy}
       />
     )}

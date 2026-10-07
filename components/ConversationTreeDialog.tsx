@@ -1,13 +1,22 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { GitBranch, RotateCcw, X } from "lucide-react";
+import { GitBranch, MoreHorizontal, RotateCcw, Trash2, X } from "lucide-react";
+import { Menu } from "@base-ui/react/menu";
 import type { ConversationPromptNode, ConversationTree } from "@/lib/conversation-tree";
 import { panTreeCamera, treeZoomLimits, wheelTreeScale, zoomTreeCamera } from "@/lib/conversation-tree-camera";
 import type { TreeCamera } from "@/lib/conversation-tree-camera";
 import { useI18n } from "@/lib/i18n";
 import { Dialog, DialogClose, DialogContent, DialogTitle, Tooltip } from "./ui/primitives";
+import { ConfirmDialog } from "./ui/field";
+import { toast } from "./ui/toast";
 import styles from "./ConversationTreeDialog.module.css";
+
+/** A successful HTTP deletion stays committed even if its cleanup details cannot be read. */
+export interface ConversationTreeDeleteOutcome {
+  cleanupWarning?: boolean;
+  responseUnreadable?: boolean;
+}
 
 interface ConversationTreeDialogProps {
   sessionId: string;
@@ -15,6 +24,7 @@ interface ConversationTreeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onLeafChange: (leafId: string | null) => void;
+  onDeleted: (outcome: ConversationTreeDeleteOutcome) => void;
   busy: boolean;
   cwd?: string;
 }
@@ -93,9 +103,47 @@ function layoutPrompts(nodes: ConversationPromptNode[]): PromptLayout {
   };
 }
 
+type TreeSnapshot = ConversationTree & { revision: string; persistedLeafId: string | null };
+
 type LoadState =
-  | { key: string; status: "loading" | "error" }
-  | { key: string; status: "ready"; tree: ConversationTree };
+  | { key: string; status: "loading" }
+  | { key: string; status: "error"; messageKey: string }
+  | { key: string; status: "ready"; tree: TreeSnapshot };
+
+interface DeleteSelection {
+  key: string;
+  node: ConversationPromptNode;
+  promptCount: number;
+  revision: string;
+}
+
+const TREE_ERROR_KEYS: Record<string, string> = {
+  session_tree_stale: "conversationTree.staleError",
+  session_tree_invalid: "conversationTree.invalidError",
+  session_tree_reference_conflict: "conversationTree.referenceError",
+  session_tree_unsupported_version: "conversationTree.versionError",
+  session_file_too_large: "conversationTree.tooLargeError",
+  session_tree_target_not_found: "conversationTree.targetNotFoundError",
+  session_tree_invalid_target: "conversationTree.invalidTargetError",
+};
+
+/** Never display server exception text; stable API codes map to localized messages. */
+async function treeError(response: Response, fallback: string) {
+  const body: { code?: string } = await response.json().catch(() => ({}));
+  return { code: body.code, messageKey: body.code ? TREE_ERROR_KEYS[body.code] ?? fallback : fallback };
+}
+
+/** Count the selected prompt and every descendant branch without recursive stack limits. */
+function countSubtreePrompts(root: PositionedPrompt): number {
+  const stack = [root];
+  let count = 0;
+  while (stack.length > 0) {
+    const item = stack.pop()!;
+    count++;
+    for (const child of item.children) stack.push(child);
+  }
+  return count;
+}
 
 /** Update only the transformed layer during navigation, leaving the prompt DOM and tooltips intact. */
 function useTreeViewport(graph: PromptLayout | null, activePromptId: string | undefined) {
@@ -245,18 +293,28 @@ function useTreeViewport(graph: PromptLayout | null, activePromptId: string | un
 }
 
 /** Mount only while the dialog is open; cancel old requests and never display a previous session's tree. */
-function ConversationTreeContent({ sessionId, activeLeafId, onLeafChange, onOpenChange, busy, cwd }: Omit<ConversationTreeDialogProps, "open">) {
+function ConversationTreeContent({ sessionId, activeLeafId, onLeafChange, onDeleted, onOpenChange, busy, cwd }: Omit<ConversationTreeDialogProps, "open">) {
   const { t } = useI18n();
   const busyId = useId();
   const hintId = useId();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<LoadState | null>(null);
   const requestKey = JSON.stringify([sessionId, activeLeafId, attempt]);
+  const [pendingDelete, setPendingDelete] = useState<DeleteSelection | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deleteInFlight = useRef(false);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
     setState({ key: requestKey, status: "loading" });
+    setPendingDelete(null);
     const query = activeLeafId === null ? "" : `?${new URLSearchParams({ leafId: activeLeafId })}`;
     void (async () => {
       try {
@@ -264,11 +322,15 @@ function ConversationTreeContent({ sessionId, activeLeafId, onLeafChange, onOpen
           signal: controller.signal,
           cache: "no-store",
         });
-        if (!response.ok) throw new Error("Conversation tree request failed");
-        const tree: ConversationTree = await response.json();
+        if (!response.ok) {
+          const error = await treeError(response, "conversationTree.error");
+          if (!cancelled) setState({ key: requestKey, status: "error", messageKey: error.messageKey });
+          return;
+        }
+        const tree: TreeSnapshot = await response.json();
         if (!cancelled) setState({ key: requestKey, status: "ready", tree });
       } catch {
-        if (!cancelled) setState({ key: requestKey, status: "error" });
+        if (!cancelled) setState({ key: requestKey, status: "error", messageKey: "conversationTree.networkError" });
       }
     })();
     return () => {
@@ -281,25 +343,72 @@ function ConversationTreeContent({ sessionId, activeLeafId, onLeafChange, onOpen
   const graph = useMemo(() => tree ? layoutPrompts(tree.nodes) : null, [tree]);
   const activeIds = useMemo(() => new Set(tree?.activePromptIds), [tree]);
   const loading = state?.key !== requestKey || state.status === "loading";
-  const failed = state?.key === requestKey && state.status === "error";
+  const failed = state?.key === requestKey && state.status === "error" ? state.messageKey : null;
+  const selection = pendingDelete?.key === requestKey ? pendingDelete : null;
 
   const { viewportRef, canvasRef } = useTreeViewport(graph, tree?.activePromptIds[tree.activePromptIds.length - 1]);
 
   /** Branch switching stays on the existing read-only navigation callback. */
   const selectPrompt = (leafId: string) => {
-    if (busy) return;
+    if (busy || deleting || loading || selection) return;
     onLeafChange(leafId);
     onOpenChange(false);
   };
 
+  const requestDelete = (item: PositionedPrompt) => {
+    if (!tree || loading || deleteInFlight.current) return;
+    setPendingDelete({ key: requestKey, node: item.node, promptCount: countSubtreePrompts(item), revision: tree.revision });
+  };
+
+  /** Submit exactly the confirmed snapshot once; stale trees require a fresh selection and confirmation. */
+  const confirmDelete = async () => {
+    if (!selection || loading || deleteInFlight.current) return;
+    deleteInFlight.current = true;
+    setDeleting(true);
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/tree`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ promptId: selection.node.id, expectedRevision: selection.revision }),
+      });
+      if (!response.ok) {
+        const error = await treeError(response, "conversationTree.deleteError");
+        if (!mounted.current) return;
+        setPendingDelete(null);
+        toast.error(t(error.messageKey));
+        if (error.code === "session_tree_stale") setAttempt((value) => value + 1);
+        return;
+      }
+      let outcome: ConversationTreeDeleteOutcome;
+      try {
+        const result: { cleanupWarning?: boolean } = await response.json();
+        outcome = { cleanupWarning: result.cleanupWarning === true };
+      } catch {
+        // HTTP success means the deletion committed; unreadable details must not turn it into a failure.
+        outcome = { responseUnreadable: true };
+      }
+      // The opener-bound callback may refresh the sidebar, but cannot remount a later chat instance.
+      onDeleted(outcome);
+    } catch {
+      if (mounted.current) {
+        setPendingDelete(null);
+        toast.error(t("conversationTree.networkError"));
+      }
+    } finally {
+      deleteInFlight.current = false;
+      if (mounted.current) setDeleting(false);
+    }
+  };
+
   return (
+    <>
     <DialogContent ariaLabel={t("conversationTree.title")} className={styles.dialog} style={{ padding: 0, overflow: "hidden", width: "min(1080px, calc(100vw - 24px))", maxWidth: "calc(100vw - 24px)" }}>
       <header className={styles.header}>
         <div className={styles.heading}>
           <DialogTitle style={{ margin: 0, fontSize: 20 }}>{t("conversationTree.title")}</DialogTitle>
           {cwd && <div className={styles.cwd}>{cwd}</div>}
         </div>
-        <DialogClose className={styles.iconButton} aria-label={t("conversationTree.close")}>
+        <DialogClose className={styles.iconButton} aria-label={t("conversationTree.close")} disabled={deleting}>
           <X size={18} aria-hidden="true" />
         </DialogClose>
       </header>
@@ -311,7 +420,7 @@ function ConversationTreeContent({ sessionId, activeLeafId, onLeafChange, onOpen
       <div ref={viewportRef} className={styles.viewport} role="region" aria-label={t("conversationTree.title")} aria-describedby={hintId} aria-busy={loading} tabIndex={0}>
         {loading && <div className={styles.state} role="status">{t("conversationTree.loading")}</div>}
         {failed && <div className={styles.state}>
-          <p role="alert">{t("conversationTree.error")}</p>
+          <p role="alert">{t(failed)}</p>
           <button type="button" className={styles.retry} onClick={() => setAttempt((value) => value + 1)}><RotateCcw size={14} aria-hidden="true" />{t("conversationTree.retry")}</button>
         </div>}
         {tree && tree.nodes.length === 0 && <div className={styles.state} role="status">{t("conversationTree.empty")}</div>}
@@ -327,27 +436,62 @@ function ConversationTreeContent({ sessionId, activeLeafId, onLeafChange, onOpen
               </div>;
             }))}
           </div>
-          <ol className={styles.nodes}>
-            {graph.items.map(({ node, x, y }) => {
-              const text = node.text || t("conversationTree.imagePrompt");
-              const active = activeIds.has(node.id);
-              return <li key={node.id} className={styles.node} data-prompt-id={node.id} style={{ left: x, top: y, width: CARD_WIDTH, height: CARD_HEIGHT }}>
-                <Tooltip content={<div className={styles.fullPrompt} tabIndex={0}>{text}</div>}>
-                  <button type="button" className={styles.card} data-active={active} aria-current={active ? "true" : undefined} aria-disabled={busy} aria-describedby={busy ? busyId : undefined} onClick={() => selectPrompt(node.leafId)}>
-                    <span className={styles.cardHeading}><GitBranch size={13} aria-hidden="true" />{active && <span>{t("conversationTree.activeBranch")}</span>}</span>
-                    <span className={styles.preview}>{text}</span>
-                  </button>
-                </Tooltip>
-              </li>;
-            })}
-          </ol>
+          <Menu.Root<PositionedPrompt> key={requestKey}>
+            {({ payload }) => <>
+              <ol className={styles.nodes}>
+                {graph.items.map((item) => {
+                  const { node, x, y } = item;
+                  const text = node.text || t("conversationTree.imagePrompt");
+                  const active = activeIds.has(node.id);
+                  return <li key={node.id} className={styles.node} data-prompt-id={node.id} style={{ left: x, top: y, width: CARD_WIDTH, height: CARD_HEIGHT }}>
+                    <Tooltip content={<div className={styles.fullPrompt} tabIndex={0}>{text}</div>}>
+                      <button type="button" className={styles.card} data-active={active} aria-current={active ? "true" : undefined} aria-disabled={busy || deleting} aria-describedby={busy ? busyId : undefined} onClick={() => selectPrompt(node.leafId)}>
+                        <span className={styles.cardHeading}><GitBranch size={13} aria-hidden="true" />{active && <span>{t("conversationTree.activeBranch")}</span>}</span>
+                        <span className={styles.preview}>{text}</span>
+                      </button>
+                    </Tooltip>
+                    <Menu.Trigger className={styles.nodeActionsButton} aria-label={t("projects.actions")} disabled={loading || deleting} payload={item}>
+                      <MoreHorizontal size="1em" aria-hidden="true" />
+                    </Menu.Trigger>
+                  </li>;
+                })}
+              </ol>
+              <Menu.Portal>
+                <Menu.Positioner className={styles.nodeMenuPositioner} side="bottom" align="end" sideOffset={4}>
+                  <Menu.Popup className={styles.nodeMenu} finalFocus={selection ? false : undefined}>
+                    <Menu.Item className={styles.nodeMenuItem} aria-label={payload ? t("conversationTree.deletePromptLabel", { prompt: payload.node.text || t("conversationTree.imagePrompt") }) : undefined} disabled={!payload || loading || deleting} onClick={() => { if (payload) requestDelete(payload); }}>
+                      <Trash2 size="1em" aria-hidden="true" />
+                      {t("conversationTree.deletePrompt")}
+                    </Menu.Item>
+                  </Menu.Popup>
+                </Menu.Positioner>
+              </Menu.Portal>
+            </>}
+          </Menu.Root>
         </div>}
       </div>
     </DialogContent>
+    <ConfirmDialog
+      open={selection !== null}
+      onOpenChange={(open) => { if (!open && !deleteInFlight.current) setPendingDelete(null); }}
+      title={t("conversationTree.deleteTitle")}
+      description={selection && <>
+        <span className={styles.confirmParagraph}>{t("conversationTree.deleteScope", { count: selection.promptCount, descendantCount: selection.promptCount - 1 })}</span>
+        <span className={styles.confirmParagraph}>{t("conversationTree.nativeRisk")}</span>
+        <span className={styles.confirmParagraph}>{t("conversationTree.selectedPrompt")}</span>
+        <span className={styles.confirmPreview}>{selection.node.text || t("conversationTree.imagePrompt")}</span>
+      </>}
+      confirmLabel={t(deleting ? "conversationTree.deleting" : "conversationTree.deleteConfirm")}
+      cancelLabel={t("conversationTree.deleteCancel")}
+      danger
+      busy={deleting || loading}
+      onConfirm={() => void confirmDelete()}
+    />
+    </>
   );
 }
 
-/** Visualize prompt ancestry inside one session; opening never starts or mutates an agent session. */
+/** Visualize prompt ancestry; only an explicitly confirmed deletion mutates persisted history. */
 export function ConversationTreeDialog({ open, ...props }: ConversationTreeDialogProps) {
   return <Dialog open={open} onOpenChange={props.onOpenChange}>
     {open && <ConversationTreeContent {...props} />}

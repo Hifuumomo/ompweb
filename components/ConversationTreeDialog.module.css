@@ -185,6 +185,11 @@
   list-style: none;
 }
 
+.node,
+.nodeMenu {
+  font-size: 12px;
+}
+
 .node {
   position: absolute;
 }
@@ -196,13 +201,13 @@
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  padding: 8px 10px;
+  padding: 8px 28px 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--bg-panel);
   color: var(--text);
   text-align: left;
-  font-size: 12px;
+  font-size: inherit;
   line-height: 1.4;
   cursor: pointer;
   box-shadow: var(--shadow-card);
@@ -211,7 +216,7 @@
 .card[data-active="true"] {
   border: 2px solid var(--accent);
   background: var(--user-bg);
-  padding: 7px 9px;
+  padding: 7px 27px 7px 9px;
 }
 
 .card:hover,
@@ -221,6 +226,83 @@
 
 .card[aria-disabled="true"] {
   cursor: not-allowed;
+}
+
+.nodeActionsButton {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font: inherit;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-control) / 2);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.nodeActionsButton:hover,
+.nodeActionsButton:focus-visible,
+.nodeActionsButton[aria-expanded="true"] {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.nodeActionsButton:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.nodeMenuPositioner {
+  z-index: 1002;
+}
+
+.nodeMenu {
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+
+.nodeMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  color: var(--status-error);
+  cursor: pointer;
+  outline: none;
+}
+
+.nodeMenuItem[data-highlighted] {
+  background: var(--bg-hover);
+}
+
+.confirmParagraph {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.confirmPreview {
+  display: block;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-subtle);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .cardHeading {
