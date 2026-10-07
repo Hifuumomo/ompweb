@@ -14,7 +14,6 @@ import {
   MAX_PROJECT_SESSIONS,
   displayCwd,
   formatRelativeTime,
-  projectLabel,
   type SessionTreeNode,
   type WorktreeState,
 } from "./SessionSidebar-helpers";
@@ -134,7 +133,7 @@ function ProjectRow({
     if (alias === (project.alias ?? "")) return;
     void onUpdatePresentation(project.path, { alias });
   }, [aliasValue, project.alias, project.path, onUpdatePresentation]);
-  const label = project.alias ?? projectLabel(project.path);
+  const label = project.alias ?? project.path;
   const hasActivity = Boolean(activity && (activity.running > 0 || activity.unread > 0 || activity.exited > 0));
   const visibleRoots = hiddenCount > 0 && !showAllSessions
     ? tree.slice(0, MAX_PROJECT_SESSIONS)
@@ -269,21 +268,35 @@ function ProjectRow({
                 aria-hidden="true"
               />
               <span style={{ display: "inline-flex", alignItems: "center", gap: 2, minWidth: 0 }}>
-                <span
-                  style={{
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    letterSpacing: "-0.01em",
-                    lineHeight: 1.25,
-                  }}
-                >
-                  {label}
-                </span>
+                {/** Paths keep their suffix visible; explicit aliases retain right ellipsis. */}
+                {project.alias != null ? (
+                  <span
+                    style={{
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      letterSpacing: "-0.01em",
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    {label}
+                  </span>
+                ) : (
+                  <PathLabel
+                    text={label}
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      letterSpacing: "-0.01em",
+                      lineHeight: 1.25,
+                    }}
+                  />
+                )}
                 {worktreeBranch && worktreeToggleRef && (
                   <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.7 }}>·</span>
                 )}

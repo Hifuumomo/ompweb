@@ -33,6 +33,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
+- Show full project paths as default labels in the workspace sidebar. On narrow rows, an ellipsis on the left keeps trailing directory characters visible as the available width changes. Explicit workspace aliases remain unchanged, and hover still shows the full path.
 - Show Mermaid diagrams as rendered previews by default in chat, matching Markdown file previews. Keep **Source / Preview** switching; streaming diagrams show source and automatically open the preview when the reply finishes.
 - Preserve user choices for **Process details**, thinking, tools, and tool groups within a session view when activity updates, groups grow, or live/idle rendering changes. Restore choices after closing and reopening parent details and through tool-bearing streaming commits. Keep assistant text visible and deferred details lazy. Pure thinking/text commits without a tool ID still lack a reliable history identity mapping; existing commit-time duplicate/gap display remains. See the [repair and verification record](docs/process-expansion-fix.md). This source change does not update an installed global npm package.
 - Balance the composer icons on phones and narrow toolbars with a slightly smaller effort-level icon and a larger Slow-mode snail, while keeping menu icon sizes unchanged.
