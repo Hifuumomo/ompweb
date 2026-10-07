@@ -1016,6 +1016,11 @@ pre, code {
   background: var(--bg);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 42%, transparent);
 }
+.latex-block-preview {
+  padding: 11px 13px;
+  color: var(--text);
+  overflow-x: auto;
+}
 .markdown-code-header {
   padding: 5px 10px;
   background: var(--bg-panel);

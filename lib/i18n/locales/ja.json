@@ -749,6 +749,8 @@
   "fileViewer.unchangedLines.other": "... 変更なし {count} 行 ...",
   "fileViewer.viewMode": "ファイル表示モード",
   "languageSwitcher.switchTo": "言語を {language} に切り替え",
+  "latexBlock.source": "ソース",
+  "latexBlock.preview": "レンダリング",
   "mermaidBlock.close": "閉じる",
   "mermaidBlock.diagramTitle": "Mermaid 図",
   "mermaidBlock.fitToWidth": "幅に合わせる",

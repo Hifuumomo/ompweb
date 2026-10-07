@@ -749,6 +749,8 @@
   "fileViewer.unchangedLines.other": "... {count} 行未更改 ...",
   "fileViewer.viewMode": "文件查看模式",
   "languageSwitcher.switchTo": "切换语言为 {language}",
+  "latexBlock.source": "源码",
+  "latexBlock.preview": "渲染",
   "mermaidBlock.close": "关闭",
   "mermaidBlock.diagramTitle": "Mermaid 图表",
   "mermaidBlock.fitToWidth": "适应宽度",
